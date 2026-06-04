@@ -14,6 +14,7 @@ connectDB();
 
 // Mount Router Middleware
 app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/courses', require('./routes/courseRoutes'));
 
 app.get('/', (req, res) => {
     res.send('Exam & Course Archive API is running smoothly...');
