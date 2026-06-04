@@ -92,3 +92,66 @@ exports.getStudentStats = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// @desc    Get leaderboard rankings for one specific exam (Only highest score per unique student)
+// @route   GET /api/analytics/leaderboard/:examId
+// @access  Private
+exports.getExamLeaderboard = async (req, res) => {
+    try {
+        const { examId } = req.params;
+
+        const leaderboard = await Submission.aggregate([
+            {
+                // 1. Filter submissions to only match this specific Exam ID
+                $match: { exam: new mongoose.Types.ObjectId(examId) }
+            },
+            {
+                // 2. Group by student ID and find their single maximum score
+                $group: {
+                    _id: '$student', // Groups identical student IDs together
+                    highestScore: { $max: '$score' }, // Isolates their top attempt score
+                    lastSubmittedAt: { $min: '$submittedAt' } // Keeps the earliest timestamp if scores tie
+                }
+            },
+            {
+                // 3. Sort from highest maximum score to lowest
+                $sort: { highestScore: -1, lastSubmittedAt: 1 }
+            },
+            {
+                // 4. Limit to top 100 entries for performance scaling
+                $limit: 100
+            },
+            {
+                // 5. Lookup user data (name) from the users collection
+                $lookup: {
+                    from: 'users',
+                    localField: '_id', // The grouped student ID is now sitting in _id
+                    foreignField: '_id',
+                    as: 'studentInfo'
+                }
+            },
+            {
+                // 6. Flatten the array structure returned by $lookup
+                $unwind: '$studentInfo'
+            },
+            {
+                // 7. Select only the necessary clean fields to expose to the frontend client
+                $project: {
+                    _id: 0,
+                    studentId: '$_id',
+                    studentName: '$studentInfo.name',
+                    score: '$highestScore',
+                    submittedAt: '$lastSubmittedAt'
+                }
+            }
+        ]);
+
+        res.status(200).json({
+            success: true,
+            count: leaderboard.length,
+            data: leaderboard
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
