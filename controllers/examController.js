@@ -52,11 +52,24 @@ exports.submitExam = async (req, res) => {
         const totalQuestions = exam.questions.length;
         const marksPerQuestion = exam.totalMarks / totalQuestions;
 
+        const penalty = exam.negativeMarksPerQuestion || 0.25;
+
         // Loop through questions to evaluate correct values
         exam.questions.forEach((question, index) => {
-            // Compare user choice with stored correct index
-            if (answers[index] !== undefined && answers[index] === question.correctOptionIndex) {
+            const studentAnswer = answers[index];
+
+            // Case 1: Student skipped the question (represented as null or -1)
+            if (studentAnswer === undefined || studentAnswer === null || studentAnswer === -1) {
+                return; // No points added, no penalty applied
+            }
+
+            // Case 2: Correct Answer
+            if (studentAnswer === question.correctOptionIndex) {
                 dynamicScore += marksPerQuestion;
+            }
+            // Case 3: Wrong Answer (Apply Penalty)
+            else {
+                dynamicScore -= penalty;
             }
         });
 
@@ -65,7 +78,7 @@ exports.submitExam = async (req, res) => {
             student: req.user.id,
             exam: exam._id,
             answers,
-            score: dynamicScore
+            score: parseFloat(dynamicScore.toFixed(2))
         });
 
         res.status(201).json({

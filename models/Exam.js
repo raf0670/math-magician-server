@@ -21,6 +21,10 @@ const ExamSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    negativeMarksPerQuestion: {
+        type: Number,
+        default: 0.25 // Defaults to 0.25 if not explicitly provided by admin
+    },
     createdAt: {
         type: Date,
         default: Date.now

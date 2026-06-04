@@ -4,7 +4,8 @@ const SubmissionSchema = new mongoose.Schema({
     student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: true,
+        index: true
     },
     exam: {
         type: mongoose.Schema.Types.ObjectId,
@@ -25,5 +26,8 @@ const SubmissionSchema = new mongoose.Schema({
         default: Date.now
     }
 });
+
+// Create a compound index if you ever want to optimize queries looking for a specific exam's submissions sorted by score
+SubmissionSchema.index({ exam: 1, score: -1 });
 
 module.exports = mongoose.model('Submission', SubmissionSchema);
