@@ -30,6 +30,16 @@ exports.getExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam configuration not found' });
         }
 
+        if (exam.isLiveExam) {
+            const currentTime = new Date();
+            if (currentTime < exam.startTime) {
+                return res.status(403).json({
+                    success: false,
+                    message: `This live exam hasn't started yet. It will unlock at ${exam.startTime.toLocaleString()}`
+                });
+            }
+        }
+
         res.status(200).json({ success: true, data: exam });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -48,6 +58,7 @@ exports.submitExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam not found' });
         }
 
+        // DOUBLE-SUBMISSION GUARD
         if (!exam.allowRetakes) {
             const existingSubmission = await Submission.findOne({
                 student: req.user.id,
@@ -58,6 +69,17 @@ exports.submitExam = async (req, res) => {
                 return res.status(400).json({
                     success: false,
                     message: 'You have already submitted this exam. Retakes are restricted.'
+                });
+            }
+        }
+
+        // NEW LIVE EXAM DEADLINE GATE
+        if (exam.isLiveExam) {
+            const currentTime = new Date();
+            if (currentTime > exam.endTime) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'The submission portal has closed! You missed the official live exam deadline.'
                 });
             }
         }

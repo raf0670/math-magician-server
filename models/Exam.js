@@ -29,6 +29,16 @@ const ExamSchema = new mongoose.Schema({
         type: Boolean,
         default: false // By default, strict formal exams block double submissions
     },
+    isLiveExam: {
+        type: Boolean,
+        default: false // If false, it's a practice exam open anytime. If true, strict gates apply.
+    },
+    startTime: {
+        type: Date // The exact moment the test paper becomes visible
+    },
+    endTime: {
+        type: Date // The exact moment submissions freeze
+    },
     createdAt: {
         type: Date,
         default: Date.now
