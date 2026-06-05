@@ -5,185 +5,181 @@ const puppeteer = require('puppeteer');
 const SEARCH_INDEX_URL = 'https://gmatclub.com/forum/search.php?selected_search_tags%5B%5D=1533&selected_search_tags%5B%5D=187&selected_search_tags%5B%5D=52&selected_search_tags%5B%5D=57&t=0&search_tags=exact&submit=Search';
 // const SEARCH_INDEX_URL = 'https://gmatclub.com/forum/search.php?view=search_tags';
 
-async function runMultiPageCrawler() {
+async function runScoutingCrawler() {
     let browser;
     try {
         console.log('🔌 Connecting to running Edge browser on port 9222...');
-        browser = await puppeteer.connect({
-            browserURL: 'http://127.0.0.1:9222'
-        });
+        browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9222' });
 
-        // Create a fresh tab explicitly for the search scanner
         const targetPage = await browser.newPage();
         await targetPage.setViewport({ width: 1280, height: 800 });
 
         console.log('🌐 Loading search results index page...');
         await targetPage.goto(SEARCH_INDEX_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // Extract links that match the specific forum question topic URL pattern
-        console.log('🕵️‍♂️ Scanning page with optimized DOM scoping and keyword exclusion...');
+        console.log('🕵️‍♂️ Scanning search page rows for valid question URLs...');
         const questionUrls = await targetPage.evaluate(() => {
-            // 1. Isolate the main forum thread rows to exclude sidebars, headers, and footers
-            // GMAT Club uses '.table-list', '.forum-topics', or generic search result containers
-            const searchContainer = document.querySelector('#page-body, .page-content, .search.post');
-            const searchContext = searchContainer ? searchContainer : document;
+            const mainContainer = document.querySelector('#page-body') || document;
+            const rows = Array.from(mainContainer.querySelectorAll('a'));
 
-            const links = Array.from(searchContext.querySelectorAll('a'));
-
-            return links
-                .map(link => ({
-                    href: link.href,
-                    text: (link.innerText || '').toLowerCase()
-                }))
-                .filter(item => {
-                    if (!item.href) return false;
-
-                    const urlStr = item.href.toLowerCase();
-
-                    // Must be a standard forum topic HTML page route
+            return rows
+                .map(link => link.href)
+                .filter(href => {
+                    if (!href) return false;
+                    const urlStr = href.toLowerCase();
                     const isForumTopic = urlStr.includes('gmatclub.com/forum/') && urlStr.endsWith('.html');
-
-                    // Look out for resource directory keywords in BOTH the URL string and the visible anchor text link
-                    const isResourceClutter =
+                    const isClutter =
                         urlStr.includes('gmat-math-book') ||
                         urlStr.includes('downloadable-pdf') ||
                         urlStr.includes('all-you-need') ||
-                        urlStr.includes('error-log') ||
                         urlStr.includes('directory') ||
-                        item.text.includes('book') ||
-                        item.text.includes('download') ||
-                        item.text.includes('guide') ||
-                        item.text.includes('announcement');
+                        urlStr.includes('search.php') ||
+                        urlStr.includes('view=');
 
-                    return isForumTopic && !isResourceClutter;
+                    return isForumTopic && !isClutter;
                 })
-                .map(item => item.href)
-                // Ensure only unique values remain in our clean crawl list queue array
                 .filter((value, index, self) => self.indexOf(value) === index);
         });
 
-        console.log(`🎯 Found ${questionUrls.length} unique question threads on this index page!`);
-
-        // Close the search index tab to free up system memory
+        console.log(`🎯 Found ${questionUrls.length} targeted paths to evaluate.`);
         await targetPage.close();
 
-        if (questionUrls.length === 0) {
-            throw new Error('No valid question URLs detected on the index layout.');
-        }
+        if (questionUrls.length === 0) return;
 
-        const scrapedQuestionBank = [];
+        // Process a robust test batch of 10 items
+        const targetLinksToCrawl = questionUrls.slice(24, 40);
+        const locallyCapturedBank = [];
 
-        // We will limit our crawl test run to the first 5 links so we don't spam the server
-        const targetLinksToCrawl = questionUrls.slice(0, questionUrls.length);
-
-        // Loop through each question URL sequentially
         for (let i = 0; i < targetLinksToCrawl.length; i++) {
             const url = targetLinksToCrawl[i];
-            console.log(`\n🚙 [${i + 1}/${targetLinksToCrawl.length}] Crawling link: ${url}`);
+            console.log(`\n🚙 [${i + 1}/${targetLinksToCrawl.length}] Processing layout at: ${url}`);
 
             const currentTab = await browser.newPage();
             try {
                 await currentTab.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
+                await currentTab.evaluate(() => new Promise(resolve => setTimeout(resolve, 2000)));
 
-                // Add a human-mimicking delay so the server doesn't flag the rapid navigation
-                await currentTab.evaluate(() => new Promise(resolve => setTimeout(resolve, 2500)));
+                // Read the whole body plain text to dodge CSS selector shifts entirely
+                const fullPageRawText = await currentTab.evaluate(() => document.body.innerText);
 
-                // Extract the full page raw body text
-                const bodyText = await currentTab.evaluate(() => document.body.innerText);
-
-                // Parse the body string using a dynamic word-search algorithm
-                const parsedData = parseBodyTextToSchema(bodyText);
+                const parsedData = parseRawTextToSchema(fullPageRawText);
 
                 if (parsedData) {
-                    scrapedQuestionBank.push(parsedData);
-                    console.log(`✅ Successfully extracted: "${parsedData.questionText.substring(0, 45)}..."`);
+                    locallyCapturedBank.push(parsedData);
+                    console.log(`✅ Cleanly Extracted: "${parsedData.questionText.substring(0, 45)}..."`);
                 } else {
-                    console.log(`⚠️ Skipped link: Text layout didn't match our GMAT problem keywords.`);
+                    console.log('⚠️ Skipped: Could not build a validated 5-option schema object from raw layout text.');
                 }
 
             } catch (tabError) {
-                console.error(`❌ Failed processing tab execution window: ${tabError.message}`);
+                console.error(`❌ Frame thread error: ${tabError.message}`);
             } finally {
-                // Always close the tab when finished to prevent memory leaks
                 await currentTab.close();
             }
         }
 
-        console.log('\n================ CRAWL EXTRACTION REPORT ================');
-        console.log(`🎉 Successfully compiled ${scrapedQuestionBank.length} questions ready for seeding!`);
-        console.log(JSON.stringify(scrapedQuestionBank, null, 2));
-        console.log('=========================================================\n');
+        console.log('\n================🚀 SCOUTING CRAWLER LIVE BATCH REPORT 🚀================');
+        console.log(`📋 Total clean objects captured during this run: ${locallyCapturedBank.length}\n`);
+        console.log(JSON.stringify(locallyCapturedBank, null, 2));
+        console.log('========================================================================\n');
 
     } catch (error) {
-        console.error('❌ Multi-page crawling routine aborted:', error.message);
+        console.error('❌ Root System Execution Error:', error.message);
     } finally {
-        if (browser) {
-            await browser.disconnect();
-            console.log('🔌 Safely disconnected from Edge instance.');
-        }
+        if (browser) await browser.disconnect();
     }
 }
 
-// Resilient text-driven extraction logic
-function parseBodyTextToSchema(fullBodyText) {
-    const lines = fullBodyText.split('\n');
-    let questionStartIndex = -1;
+function parseRawTextToSchema(fullBodyText) {
+    // 1. Normalize spacing to avoid variable tab/line break interference
+    const cleanBody = fullBodyText.replace(/\s+/g, ' ');
 
-    // Locate the starting line of the core question block dynamically
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].toLowerCase();
-        // Look for generic markers that indicate a math problem text layout
-        if ((line.includes('if') || line.includes('from the') || line.includes('what is') || line.includes('which of')) &&
-            (line.includes('integer') || line.includes('value') || line.includes('product') || line.includes('equal'))) {
-            questionStartIndex = i;
-            break;
-        }
+    // 2. Identify the true core question start token
+    const matchQuestion = cleanBody.match(/(?:If|From the|What is|Which of|In a room|How many)\s[^]*?(?=\b[A-E]\)|[A-E]\.|\([A-E]\))/i);
+    if (!matchQuestion) return null;
+
+    const startIndex = cleanBody.indexOf(matchQuestion[0]);
+    if (startIndex === -1) return null;
+
+    // Grab a focused 2000-character snapshot window right where the problem lives
+    const sampleTextWindow = cleanBody.substring(startIndex, startIndex + 2000);
+
+    // 3. Pinpoint the exact starting positions of the 5 option markers in the string window
+    const markerPatterns = [
+        /(?:\s|^)(A)(?:\.|\)|\s)/,
+        /(?:\s|^)(B)(?:\.|\)|\s)/,
+        /(?:\s|^)(C)(?:\.|\)|\s)/,
+        /(?:\s|^)(D)(?:\.|\)|\s)/,
+        /(?:\s|^)(E)(?:\.|\)|\s)/
+    ];
+
+    const markerIndices = [];
+    let lastFoundIdx = 0;
+
+    for (let i = 0; i < markerPatterns.length; i++) {
+        // Look forward from the last marker to ensure correct algebraic A->B->C->D->E sequence
+        const searchSubstr = sampleTextWindow.substring(lastFoundIdx);
+        const match = searchSubstr.match(markerPatterns[i]);
+
+        if (!match) return null; // If any option marker is completely absent, reject this malformed block
+
+        const absoluteIdx = lastFoundIdx + match.index;
+        markerIndices.push({
+            letter: match[1],
+            start: absoluteIdx,
+            end: absoluteIdx + match[0].length
+        });
+
+        lastFoundIdx = absoluteIdx + match[0].length;
     }
 
-    if (questionStartIndex === -1) return null;
+    // 4. Extract Question Text (Everything up to Option A marker)
+    let questionTextStr = sampleTextWindow.substring(0, markerIndices[0].start).trim();
 
-    const relevantLines = lines.slice(questionStartIndex, questionStartIndex + 30);
-    let questionText = '';
-    let options = [];
-    const optionLetters = ['A)', 'B)', 'C)', 'D)', 'E)'];
+    // Aggressively slice out forum meta-clutter if it managed to slip into the question text block
+    questionTextStr = questionTextStr
+        .split(/(\d{3}-\d{3}\s*\(Hard\))/i)[0] // Drops "655-705 (Hard)..."
+        .split('Show Answer')[0]
+        .split('Source')[0]
+        .split('⏱️')[0]
+        .trim();
 
-    for (let i = 0; i < relevantLines.length; i++) {
-        const line = relevantLines[i].trim();
-        if (line.length === 0) continue;
+    // 5. Slice Option Strings cleanly using the boundary coordinates of the next marker
+    const optionsArray = [];
+    for (let i = 0; i < 5; i++) {
+        const currentMarker = markerIndices[i];
+        // If it's option E, capture up to the end of a reasonable string chunk window
+        const nextMarkerStart = (i < 4) ? markerIndices[i + 1].start : currentMarker.end + 150;
 
-        const isOptionStart = optionLetters.some(letter => line.startsWith(letter));
+        let optionRawValue = sampleTextWindow.substring(currentMarker.end, nextMarkerStart).trim();
 
-        if (isOptionStart) {
-            let nextLineVal = (relevantLines[i + 1] || '').trim();
-
-            // Basic math notation cleanup
-            if (nextLineVal.includes('*') || nextLineVal.includes('!')) {
-                nextLineVal = nextLineVal.split('*')[0].trim();
-            }
-
-            if (options.length < 5 && nextLineVal.length > 0 && !options.includes(nextLineVal)) {
-                options.push(nextLineVal);
-            }
-            i++;
-        } else if (options.length === 0) {
-            if (!line.includes('Show Answer') && !line.includes('History') && !line.includes('My Mistake') && !line.includes('Posts:')) {
-                questionText += line + ' ';
-            }
+        // Strip away trailing noise leak fragments if we are evaluating Option E
+        if (i === 4) {
+            optionRawValue = optionRawValue
+                .split('Show Answer')[0]
+                .split('Source')[0]
+                .split('Most Active')[0]
+                .split('⏱️')[0]
+                .split('Discuss')[0]
+                .trim();
         }
+
+        if (optionRawValue.length === 0) return null;
+        optionsArray.push(optionRawValue);
     }
 
-    // Fallback defaults if layout variation misses choices
-    if (options.length < 5) {
-        options = ['Option A', 'Option B', 'Option C', 'Option D', 'Option E'];
+    // Final Structural Verification Check
+    if (optionsArray.length !== 5 || questionTextStr.length < 15) {
+        return null;
     }
 
     return {
-        questionText: questionText.trim(),
-        options: options.slice(0, 5),
-        correctOptionIndex: 4, // Default placeholder index
+        questionText: questionTextStr,
+        options: optionsArray,
+        correctOptionIndex: 4, // Seed placeholder mapping coordinates
         subject: 'Quantitative',
         chapter: 'Arithmetic'
     };
 }
 
-runMultiPageCrawler();
+runScoutingCrawler();
