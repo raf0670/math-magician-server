@@ -48,6 +48,20 @@ exports.submitExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam not found' });
         }
 
+        if (!exam.allowRetakes) {
+            const existingSubmission = await Submission.findOne({
+                student: req.user.id,
+                exam: exam._id
+            });
+
+            if (existingSubmission) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'You have already submitted this exam. Retakes are restricted.'
+                });
+            }
+        }
+
         let dynamicScore = 0;
         const totalQuestions = exam.questions.length;
         const marksPerQuestion = exam.totalMarks / totalQuestions;
