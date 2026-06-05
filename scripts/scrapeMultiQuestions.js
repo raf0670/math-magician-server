@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 
 // The main search results index URL you provided
+// MUST RUN FROM ANOTHER TERMINAL: "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222 --user-data-dir="C:\edge-dev-profile"
 const SEARCH_INDEX_URL = 'https://gmatclub.com/forum/search.php?selected_search_tags%5B%5D=1533&selected_search_tags%5B%5D=187&selected_search_tags%5B%5D=52&selected_search_tags%5B%5D=57&t=0&search_tags=exact&submit=Search';
 // const SEARCH_INDEX_URL = 'https://gmatclub.com/forum/search.php?view=search_tags';
 
