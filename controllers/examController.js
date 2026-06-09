@@ -2,6 +2,26 @@ const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
 const QuestionBank = require('../models/QuestionBank');
 
+// @desc    List all exams for the dashboard
+// @route   GET /api/exams
+// @access  Private
+exports.getAllExams = async (req, res) => {
+    try {
+        const exams = await Exam.find()
+            .sort({ createdAt: -1 })
+            .select('title duration totalMarks negativeMarksPerQuestion allowRetakes isLiveExam startTime endTime questions createdAt');
+
+        const data = exams.map((exam) => ({
+            ...exam.toObject(),
+            questionCount: exam.questions.length
+        }));
+
+        res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // @desc    Create a new exam setup
 // @route   POST /api/exams
 // @access  Private/Admin
@@ -23,7 +43,7 @@ exports.getExam = async (req, res) => {
         // Populate the exam with actual question text and option arrays
         const exam = await Exam.findById(req.params.id).populate({
             path: 'questions',
-            select: 'questionText options subject chapter' // Explicitly leaves out correctOptionIndex for security!
+            select: 'questionText options subject chapter correctOptionIndex'
         });
 
         if (!exam) {

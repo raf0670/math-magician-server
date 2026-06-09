@@ -25,6 +25,12 @@ const UserSchema = new mongoose.Schema({
         enum: ['student', 'admin'],
         default: 'student'
     },
+    bio: {
+        type: String,
+        trim: true,
+        maxlength: [160, 'Bio must be 160 characters or fewer'],
+        default: ''
+    },
     enrolledCourses: [
         {
             type: mongoose.Schema.Types.ObjectId,
