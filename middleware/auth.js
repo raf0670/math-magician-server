@@ -17,6 +17,10 @@ exports.protect = async (req, res, next) => {
             // Fetch the user from DB based on decoded ID, excluding the password field, and attach to request
             req.user = await User.findById(decoded.id);
 
+            if (!req.user) {
+                return res.status(401).json({ success: false, message: 'Not authorized, user account was not found' });
+            }
+
             next(); // Move on to the actual route handler function
         } catch (error) {
             return res.status(401).json({ success: false, message: 'Not authorized, invalid token' });

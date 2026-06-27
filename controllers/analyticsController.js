@@ -13,12 +13,19 @@ exports.getGlobalLeaderboard = async (req, res) => {
                 $group: {
                     _id: '$student',
                     totalScore: { $sum: '$score' },
-                    examsTaken: { $sum: 1 }
+                    examsTaken: { $sum: 1 },
+                    bestScore: { $max: '$score' },
+                    lastSubmittedAt: { $max: '$submittedAt' }
+                }
+            },
+            {
+                $addFields: {
+                    averageScore: { $round: [{ $divide: ['$totalScore', '$examsTaken'] }, 2] }
                 }
             },
             {
                 // Sort from highest total points accumulated to lowest
-                $sort: { totalScore: -1 }
+                $sort: { totalScore: -1, averageScore: -1, lastSubmittedAt: 1 }
             },
             {
                 // Limit response to top 100 students for performance efficiency
@@ -44,12 +51,20 @@ exports.getGlobalLeaderboard = async (req, res) => {
                     studentId: '$_id',
                     name: '$studentInfo.name',
                     totalScore: 1,
-                    examsTaken: 1
+                    examsTaken: 1,
+                    averageScore: 1,
+                    bestScore: 1,
+                    lastSubmittedAt: 1
                 }
             }
         ]);
 
-        res.status(200).json({ success: true, count: leaderboard.length, data: leaderboard });
+        const rankedLeaderboard = leaderboard.map((entry, index) => ({
+            ...entry,
+            rank: index + 1
+        }));
+
+        res.status(200).json({ success: true, count: rankedLeaderboard.length, data: rankedLeaderboard });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
