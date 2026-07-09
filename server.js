@@ -17,6 +17,7 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
 app.use('/api/analytics', require('./routes/analyticsRoutes'));
+app.use('/api/payments', require('./routes/paymentRoutes'));
 
 app.get('/', (req, res) => {
     res.send('Exam & Course Archive API is running smoothly...');

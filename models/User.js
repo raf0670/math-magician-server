@@ -37,6 +37,10 @@ const UserSchema = new mongoose.Schema({
             ref: 'Course' // This links the user to their purchased courses later
         }
     ],
+    hasClassAccess: {
+        type: Boolean,
+        default: false
+    },
     createdAt: {
         type: Date,
         default: Date.now

@@ -34,7 +34,7 @@ exports.register = async (req, res) => {
         res.status(201).json({
             success: true,
             token,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '' }
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess) }
         });
 
     } catch (error) {
@@ -69,7 +69,7 @@ exports.login = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '' }
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess) }
         });
 
     } catch (error) {
@@ -89,7 +89,8 @@ exports.getMe = async (req, res) => {
                 name: req.user.name,
                 email: req.user.email,
                 role: req.user.role,
-                bio: req.user.bio || ''
+                bio: req.user.bio || '',
+                hasClassAccess: Boolean(req.user.hasClassAccess)
             }
         });
     } catch (error) {
@@ -128,7 +129,8 @@ exports.updateProfile = async (req, res) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                bio: user.bio || ''
+                bio: user.bio || '',
+                hasClassAccess: Boolean(user.hasClassAccess)
             }
         });
     } catch (error) {
