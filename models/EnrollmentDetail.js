@@ -24,6 +24,11 @@ const EnrollmentDetailSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    bkashTrxID: {
+        type: String,
+        required: true,
+        trim: true
+    },
     email: {
         type: String,
         required: true,

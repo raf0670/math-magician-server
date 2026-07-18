@@ -1,11 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { createBkashPayment, handleBkashCallback, getPaymentAccess, saveEnrollmentDetails } = require('../controllers/paymentController');
-const { protect } = require('../middleware/auth');
+const {
+    submitManualEnrollment,
+    getPaymentAccess,
+    getAdminEnrollmentReviews,
+    updateEnrollmentReviewStatus
+} = require('../controllers/paymentController');
+const { protect, authorizeAdmin } = require('../middleware/auth');
 
-router.post('/bkash/create', protect, createBkashPayment);
-router.get('/bkash/callback', handleBkashCallback);
 router.get('/my-access', protect, getPaymentAccess);
-router.post('/enrollment-details', protect, saveEnrollmentDetails);
+router.post('/manual-enrollment', protect, submitManualEnrollment);
+router.get('/admin/enrollments', protect, authorizeAdmin, getAdminEnrollmentReviews);
+router.patch('/admin/enrollments/:paymentId/status', protect, authorizeAdmin, updateEnrollmentReviewStatus);
 
 module.exports = router;
