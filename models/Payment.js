@@ -87,13 +87,11 @@ const PaymentSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-PaymentSchema.pre('validate', function normalizeTransactionId(next) {
+PaymentSchema.pre('validate', function normalizeTransactionId() {
     if (this.trxID) {
         this.trxID = this.trxID.trim();
         this.trxIDNormalized = this.trxID.toUpperCase();
     }
-
-    next();
 });
 
 module.exports = mongoose.model('Payment', PaymentSchema);
