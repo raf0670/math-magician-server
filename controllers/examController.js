@@ -10,17 +10,6 @@ function buildQuestionSelect(includeAnswers = false) {
     return includeAnswers ? `${baseFields} correctOptionIndex correctAnswer correct_answer` : baseFields;
 }
 
-function buildQuestionNumberExpression() {
-    return {
-        $convert: {
-            input: { $ifNull: ['$question_no', '$questionNo'] },
-            to: 'int',
-            onError: null,
-            onNull: null
-        }
-    };
-}
-
 function getEffectiveNegativeMarksPerQuestion(value) {
     const penalty = Number(value);
     return Number.isFinite(penalty) && penalty > 0 ? penalty : 0.25;
@@ -201,13 +190,7 @@ exports.getPracticeMeta = async (req, res) => {
         const topicRows = await QuestionBank.aggregate([
             {
                 $addFields: {
-                    effectiveTopic: { $ifNull: ['$topic', '$chapter'] },
-                    effectiveQuestionNo: buildQuestionNumberExpression()
-                }
-            },
-            {
-                $match: {
-                    effectiveQuestionNo: { $ne: null }
+                    effectiveTopic: { $ifNull: ['$topic', '$chapter'] }
                 }
             },
             {
@@ -216,9 +199,7 @@ exports.getPracticeMeta = async (req, res) => {
                         subject: '$subject',
                         topic: '$effectiveTopic'
                     },
-                    count: { $sum: 1 },
-                    minQuestionNo: { $min: '$effectiveQuestionNo' },
-                    maxQuestionNo: { $max: '$effectiveQuestionNo' }
+                    count: { $sum: 1 }
                 }
             },
             { $sort: { '_id.subject': 1, '_id.topic': 1 } }
@@ -230,9 +211,7 @@ exports.getPracticeMeta = async (req, res) => {
                 .filter((row) => normalizeSubject(row._id.subject) === subject && row._id.topic)
                 .map((row) => ({
                     name: row._id.topic,
-                    questionCount: row.count,
-                    minQuestionNo: row.minQuestionNo,
-                    maxQuestionNo: row.maxQuestionNo
+                    questionCount: row.count
                 }))
         }));
 
@@ -250,8 +229,7 @@ exports.startPracticeExam = async (req, res) => {
     try {
         const subject = normalizeSubject(req.body.subject);
         const topic = req.body.topic?.toString().trim();
-        const fromQuestionNo = Number(req.body.fromQuestionNo);
-        const toQuestionNo = Number(req.body.toQuestionNo);
+        const questionCount = Number(req.body.questionCount);
 
         if (!SUBJECTS.includes(subject)) {
             return res.status(400).json({ success: false, message: 'Please choose Math, English, or Analytical.' });
@@ -261,52 +239,45 @@ exports.startPracticeExam = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Please choose a topic before starting the exam.' });
         }
 
-        if (!Number.isInteger(fromQuestionNo) || !Number.isInteger(toQuestionNo)) {
-            return res.status(400).json({ success: false, message: 'Please choose valid starting and ending question numbers.' });
-        }
-
-        if (fromQuestionNo < 1 || toQuestionNo < 1) {
-            return res.status(400).json({ success: false, message: 'Question numbers must be positive.' });
-        }
-
-        if (fromQuestionNo > toQuestionNo) {
-            return res.status(400).json({ success: false, message: 'Starting question number cannot be greater than ending question number.' });
+        if (!Number.isInteger(questionCount) || questionCount < 1) {
+            return res.status(400).json({ success: false, message: 'Please choose a valid number of questions.' });
         }
 
         const subjectRegex = buildSubjectRegex(subject);
         const topicRegex = new RegExp(`^${escapedRegex(topic)}$`, 'i');
+        const questionFilter = {
+            subject: subjectRegex,
+            $or: [
+                { topic: topicRegex },
+                { chapter: topicRegex }
+            ]
+        };
+        const availableQuestionCount = await QuestionBank.countDocuments(questionFilter);
+
+        if (availableQuestionCount === 0) {
+            return res.status(404).json({ success: false, message: 'No questions were found for this topic.' });
+        }
+
+        if (questionCount > availableQuestionCount) {
+            return res.status(400).json({
+                success: false,
+                message: `Only ${availableQuestionCount} question${availableQuestionCount === 1 ? '' : 's'} are available for this topic.`
+            });
+        }
+
         const questions = await QuestionBank.aggregate([
             {
-                $match: {
-                    subject: subjectRegex,
-                    $or: [
-                        { topic: topicRegex },
-                        { chapter: topicRegex }
-                    ]
-                }
+                $match: questionFilter
             },
-            {
-                $addFields: {
-                    effectiveQuestionNo: buildQuestionNumberExpression()
-                }
-            },
-            {
-                $match: {
-                    effectiveQuestionNo: {
-                        $gte: fromQuestionNo,
-                        $lte: toQuestionNo
-                    }
-                }
-            },
-            { $sort: { effectiveQuestionNo: 1, _id: 1 } }
+            { $sample: { size: questionCount } }
         ]);
 
         if (questions.length === 0) {
-            return res.status(404).json({ success: false, message: 'No questions were found for this topic in the selected range.' });
+            return res.status(404).json({ success: false, message: 'No questions were found for this topic.' });
         }
 
         const exam = await Exam.create({
-            title: `${subject} - ${topic} Practice (${fromQuestionNo}-${toQuestionNo})`,
+            title: `${subject} - ${topic} Practice (${questions.length} Random Questions)`,
             questions: questions.map((question) => question._id),
             duration: 0,
             totalMarks: questions.length,
