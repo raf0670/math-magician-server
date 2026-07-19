@@ -4,6 +4,21 @@ const QuestionBank = require('../models/QuestionBank');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
+const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
+
+function buildOfficialExamFilter() {
+    return {
+        $and: [
+            {
+                $or: [
+                    { examType: 'official' },
+                    { examType: { $exists: false } }
+                ]
+            },
+            { title: { $not: LEGACY_GENERATED_EXAM_TITLE } }
+        ]
+    };
+}
 
 function buildQuestionSelect(includeAnswers = false) {
     const baseFields = 'questionNo question_no question questionText options subject chapter topic explanation';
@@ -166,9 +181,9 @@ function buildQuestionReview(question, answer) {
 // @access  Private
 exports.getAllExams = async (req, res) => {
     try {
-        const exams = await Exam.find()
+        const exams = await Exam.find(buildOfficialExamFilter())
             .sort({ createdAt: -1 })
-            .select('title duration totalMarks negativeMarksPerQuestion allowRetakes isLiveExam startTime endTime questions createdAt');
+            .select('title duration totalMarks negativeMarksPerQuestion examType allowRetakes isLiveExam startTime endTime questions createdAt');
 
         const data = exams.map((exam) => ({
             ...exam.toObject(),
@@ -282,6 +297,7 @@ exports.startPracticeExam = async (req, res) => {
             duration: 0,
             totalMarks: questions.length,
             negativeMarksPerQuestion: 0.25,
+            examType: 'generatedPractice',
             allowRetakes: true,
             isLiveExam: false
         });

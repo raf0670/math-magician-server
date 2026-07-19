@@ -1,5 +1,23 @@
 const Submission = require('../models/Submission');
+const Exam = require('../models/Exam');
+const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
+
+const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
+
+function buildOfficialExamFilter() {
+    return {
+        $and: [
+            {
+                $or: [
+                    { examType: 'official' },
+                    { examType: { $exists: false } }
+                ]
+            },
+            { title: { $not: LEGACY_GENERATED_EXAM_TITLE } }
+        ]
+    };
+}
 
 // @desc    Get global leaderboard rankings sorted by total marks earned across all exams
 // @route   GET /api/analytics/leaderboard
@@ -75,16 +93,29 @@ exports.getGlobalLeaderboard = async (req, res) => {
 // @access  Private
 exports.getStudentStats = async (req, res) => {
     try {
+        const [questionBankCount, availableExamCount] = await Promise.all([
+            QuestionBank.countDocuments(),
+            Exam.countDocuments(buildOfficialExamFilter())
+        ]);
+
         // Fetch all submissions tied directly to the logged-in student's token ID
         const history = await Submission.find({ student: req.user.id })
-            .populate('exam', 'title totalMarks')
+            .populate('exam', 'title totalMarks duration examType')
             .sort({ submittedAt: -1 }); // Show newest submissions first
 
         if (history.length === 0) {
             return res.status(200).json({
                 success: true,
                 message: "No exam history found yet. Take your first test to initialize analytics!",
-                stats: { totalExams: 0, averageScore: 0, totalPointsEarned: 0 },
+                stats: {
+                    totalExams: 0,
+                    averageScore: 0,
+                    totalPointsEarned: 0,
+                    totalPossibleMarks: 0,
+                    accuracyPercentage: 0,
+                    questionBankCount,
+                    availableExamCount
+                },
                 history: []
             });
         }
@@ -92,14 +123,22 @@ exports.getStudentStats = async (req, res) => {
         // Run dynamic client performance reductions 
         const totalExams = history.length;
         const totalPointsEarned = history.reduce((sum, item) => sum + item.score, 0);
+        const totalPossibleMarks = history.reduce((sum, item) => sum + (item.exam?.totalMarks || 0), 0);
         const averageScore = parseFloat((totalPointsEarned / totalExams).toFixed(2));
+        const accuracyPercentage = totalPossibleMarks
+            ? parseFloat(((totalPointsEarned / totalPossibleMarks) * 100).toFixed(1))
+            : 0;
 
         res.status(200).json({
             success: true,
             stats: {
                 totalExams,
                 totalPointsEarned,
-                averageScore
+                averageScore,
+                totalPossibleMarks,
+                accuracyPercentage,
+                questionBankCount,
+                availableExamCount
             },
             history
         });
