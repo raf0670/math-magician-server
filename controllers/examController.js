@@ -292,7 +292,7 @@ exports.startPracticeExam = async (req, res) => {
         }
 
         const exam = await Exam.create({
-            title: `${subject} - ${topic} Practice (${questions.length} Random Questions)`,
+            title: `${subject} - ${topic} Practice (${questions.length} Questions)`,
             questions: questions.map((question) => question._id),
             duration: 0,
             totalMarks: questions.length,
