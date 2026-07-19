@@ -10,6 +10,22 @@ function buildQuestionSelect(includeAnswers = false) {
     return includeAnswers ? `${baseFields} correctOptionIndex correctAnswer correct_answer` : baseFields;
 }
 
+function buildQuestionNumberExpression() {
+    return {
+        $convert: {
+            input: { $ifNull: ['$question_no', '$questionNo'] },
+            to: 'int',
+            onError: null,
+            onNull: null
+        }
+    };
+}
+
+function getEffectiveNegativeMarksPerQuestion(value) {
+    const penalty = Number(value);
+    return Number.isFinite(penalty) && penalty > 0 ? penalty : 0.25;
+}
+
 function normalizeSubject(subject = '') {
     const rawSubject = subject == null ? '' : subject.toString().trim();
     const cleaned = rawSubject.toLowerCase();
@@ -99,6 +115,7 @@ function normalizeExamForClient(exam) {
     const plainExam = exam.toObject ? exam.toObject() : exam;
     return {
         ...plainExam,
+        negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         questions: (plainExam.questions || [])
             .map(normalizeQuestionForClient)
             .filter(Boolean)
@@ -128,6 +145,7 @@ async function normalizePopulatedExam(exam) {
 
     return {
         ...plainExam,
+        negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         questions: normalizedQuestions
     };
 }
@@ -183,7 +201,13 @@ exports.getPracticeMeta = async (req, res) => {
         const topicRows = await QuestionBank.aggregate([
             {
                 $addFields: {
-                    effectiveTopic: { $ifNull: ['$topic', '$chapter'] }
+                    effectiveTopic: { $ifNull: ['$topic', '$chapter'] },
+                    effectiveQuestionNo: buildQuestionNumberExpression()
+                }
+            },
+            {
+                $match: {
+                    effectiveQuestionNo: { $ne: null }
                 }
             },
             {
@@ -192,7 +216,9 @@ exports.getPracticeMeta = async (req, res) => {
                         subject: '$subject',
                         topic: '$effectiveTopic'
                     },
-                    count: { $sum: 1 }
+                    count: { $sum: 1 },
+                    minQuestionNo: { $min: '$effectiveQuestionNo' },
+                    maxQuestionNo: { $max: '$effectiveQuestionNo' }
                 }
             },
             { $sort: { '_id.subject': 1, '_id.topic': 1 } }
@@ -204,7 +230,9 @@ exports.getPracticeMeta = async (req, res) => {
                 .filter((row) => normalizeSubject(row._id.subject) === subject && row._id.topic)
                 .map((row) => ({
                     name: row._id.topic,
-                    questionCount: row.count
+                    questionCount: row.count,
+                    minQuestionNo: row.minQuestionNo,
+                    maxQuestionNo: row.maxQuestionNo
                 }))
         }));
 
@@ -222,7 +250,8 @@ exports.startPracticeExam = async (req, res) => {
     try {
         const subject = normalizeSubject(req.body.subject);
         const topic = req.body.topic?.toString().trim();
-        const requestedQuestionCount = Number(req.body.questionCount);
+        const fromQuestionNo = Number(req.body.fromQuestionNo);
+        const toQuestionNo = Number(req.body.toQuestionNo);
 
         if (!SUBJECTS.includes(subject)) {
             return res.status(400).json({ success: false, message: 'Please choose Math, English, or Analytical.' });
@@ -232,8 +261,16 @@ exports.startPracticeExam = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Please choose a topic before starting the exam.' });
         }
 
-        if (!Number.isInteger(requestedQuestionCount) || requestedQuestionCount < 1) {
-            return res.status(400).json({ success: false, message: 'Please choose at least 1 question.' });
+        if (!Number.isInteger(fromQuestionNo) || !Number.isInteger(toQuestionNo)) {
+            return res.status(400).json({ success: false, message: 'Please choose valid starting and ending question numbers.' });
+        }
+
+        if (fromQuestionNo < 1 || toQuestionNo < 1) {
+            return res.status(400).json({ success: false, message: 'Question numbers must be positive.' });
+        }
+
+        if (fromQuestionNo > toQuestionNo) {
+            return res.status(400).json({ success: false, message: 'Starting question number cannot be greater than ending question number.' });
         }
 
         const subjectRegex = buildSubjectRegex(subject);
@@ -248,26 +285,32 @@ exports.startPracticeExam = async (req, res) => {
                     ]
                 }
             },
-            { $sample: { size: requestedQuestionCount } }
+            {
+                $addFields: {
+                    effectiveQuestionNo: buildQuestionNumberExpression()
+                }
+            },
+            {
+                $match: {
+                    effectiveQuestionNo: {
+                        $gte: fromQuestionNo,
+                        $lte: toQuestionNo
+                    }
+                }
+            },
+            { $sort: { effectiveQuestionNo: 1, _id: 1 } }
         ]);
 
         if (questions.length === 0) {
-            return res.status(404).json({ success: false, message: 'No questions were found for this topic yet.' });
-        }
-
-        if (questions.length < requestedQuestionCount) {
-            return res.status(400).json({
-                success: false,
-                message: `Only ${questions.length} question(s) are available for ${subject} / ${topic}. Please choose a smaller exam.`
-            });
+            return res.status(404).json({ success: false, message: 'No questions were found for this topic in the selected range.' });
         }
 
         const exam = await Exam.create({
-            title: `${subject} - ${topic} Practice`,
+            title: `${subject} - ${topic} Practice (${fromQuestionNo}-${toQuestionNo})`,
             questions: questions.map((question) => question._id),
             duration: 0,
             totalMarks: questions.length,
-            negativeMarksPerQuestion: 0,
+            negativeMarksPerQuestion: 0.25,
             allowRetakes: true,
             isLiveExam: false
         });
@@ -391,7 +434,7 @@ exports.submitExam = async (req, res) => {
 
         const marksPerQuestion = exam.totalMarks / totalQuestions;
 
-        const penalty = exam.negativeMarksPerQuestion ?? 0.25;
+        const penalty = getEffectiveNegativeMarksPerQuestion(exam.negativeMarksPerQuestion);
         const review = [];
 
         // Loop through questions to evaluate correct values
@@ -429,6 +472,7 @@ exports.submitExam = async (req, res) => {
             message: 'Exam graded successfully!',
             score: dynamicScore,
             totalMarks: exam.totalMarks,
+            negativeMarksPerQuestion: penalty,
             review,
             submissionId: submission._id
         });
