@@ -1,18 +1,18 @@
 const PAYMENT_PLANS = {
     offline: {
         id: 'offline',
-        title: 'IBA Offline Batch',
-        amount: 15000
+        title: 'IBA Offline Batch - Farmgate',
+        amount: 18000
     },
     premium: {
         id: 'premium',
-        title: 'IBA Premium Combo',
-        amount: 18000
+        title: 'IBA Online Batch',
+        amount: 17500
     },
     online: {
         id: 'online',
-        title: 'IBA Online Live',
-        amount: 12000
+        title: 'IBA Offline Batch - Bailey Road',
+        amount: 18000
     }
 };
 
