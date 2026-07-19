@@ -116,8 +116,8 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     },
     preferredBatch: {
         type: String,
-        enum: ['Farmgate', 'Bailey Road', 'Online', ''],
-        default: ''
+        required: true,
+        enum: ['Farmgate', 'Bailey Road', 'Online']
     }
 }, { timestamps: true });
 

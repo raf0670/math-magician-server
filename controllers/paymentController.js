@@ -17,6 +17,7 @@ const REQUIRED_FORM_FIELDS = [
     'hscBatch',
     'backupChoice',
     'admissionSystemIdea',
+    'preferredBatch',
     'bkashTrxID'
 ];
 
