@@ -24,6 +24,12 @@ function clean(value) {
     return value?.toString().trim() || '';
 }
 
+function getBackupChoices(formData) {
+    const rawChoices = formData.backupChoice;
+    const choices = Array.isArray(rawChoices) ? rawChoices : [rawChoices];
+    return choices.map(clean).filter(Boolean);
+}
+
 function makeInvoiceNumber(userId) {
     const shortUser = userId.toString().slice(-6);
     return `MMS-${shortUser}-${Date.now()}`;
@@ -38,7 +44,14 @@ function getFormValue(formData, key) {
 }
 
 function validateManualEnrollmentForm(formData) {
-    const missingFields = REQUIRED_FORM_FIELDS.filter((field) => !getFormValue(formData, field));
+    const missingFields = REQUIRED_FORM_FIELDS.filter((field) => {
+        if (field === 'backupChoice') {
+            return !getBackupChoices(formData).length;
+        }
+
+        return !getFormValue(formData, field);
+    });
+
     return missingFields;
 }
 
@@ -131,7 +144,7 @@ exports.submitManualEnrollment = async (req, res) => {
             college: getFormValue(formData, 'college'),
             group: getFormValue(formData, 'group'),
             hscBatch: getFormValue(formData, 'hscBatch'),
-            backupChoice: getFormValue(formData, 'backupChoice'),
+            backupChoice: getBackupChoices(formData),
             admissionSystemIdea: getFormValue(formData, 'admissionSystemIdea'),
             previousIbaPreparation: getFormValue(formData, 'previousIbaPreparation'),
             previousStudyDetails: getFormValue(formData, 'previousStudyDetails'),

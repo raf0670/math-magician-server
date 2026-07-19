@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 
+const BACKUP_CHOICES = ['IBA JU', 'BUP BBA Gen', 'BUP FBS', 'DU B/C unit', 'Engineering', 'Medical', 'DU A unit', 'Private Uni', 'Abroad'];
+
 const EnrollmentDetailSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
@@ -77,9 +79,15 @@ const EnrollmentDetailSchema = new mongoose.Schema({
         enum: ['2025 or equivalent', '2026 or equivalent', '2027 or equivalent', 'Others']
     },
     backupChoice: {
-        type: String,
+        type: [{
+            type: String,
+            enum: BACKUP_CHOICES
+        }],
         required: true,
-        enum: ['IBA JU', 'BUP BBA Gen', 'BUP FBS', 'DU B/C unit', 'Engineering', 'Medical', 'DU A unit', 'Private Uni', 'Abroad']
+        validate: {
+            validator: (choices) => Array.isArray(choices) && choices.length > 0,
+            message: 'Please select at least one backup option'
+        }
     },
     admissionSystemIdea: {
         type: String,
