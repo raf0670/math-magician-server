@@ -22,9 +22,6 @@
     "jose-cjs": "^6.2.3",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.2.0",
-    "mongoose": "^9.6.3",
-    "puppeteer": "^25.1.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "mongoose": "^9.6.3"
   }
 }
