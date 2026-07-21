@@ -27,7 +27,7 @@ const ExamSchema = new mongoose.Schema({
     },
     examType: {
         type: String,
-        enum: ['official', 'generatedPractice'],
+        enum: ['official', 'generatedPractice', 'generatedQuiz'],
         default: 'official',
         index: true
     },

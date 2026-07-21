@@ -40,6 +40,11 @@ const QuestionBankSchema = new mongoose.Schema({
         required: [true, 'Please add a subject (e.g., Math, English, Analytical)'],
         trim: true
     },
+    difficulty: {
+        type: String,
+        trim: true,
+        index: true
+    },
     chapter: {
         type: String,
         required: [true, 'Please add a chapter or topic name'],

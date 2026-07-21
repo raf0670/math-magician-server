@@ -1,10 +1,16 @@
 const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
 const QuestionBank = require('../models/QuestionBank');
+const mongoose = require('mongoose');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
+const QUIZ_SUBJECT_WEIGHTS = [
+    { subject: 'English', weight: 45 },
+    { subject: 'Math', weight: 35 },
+    { subject: 'Analytical', weight: 20 }
+];
 
 function buildOfficialExamFilter() {
     return {
@@ -21,7 +27,7 @@ function buildOfficialExamFilter() {
 }
 
 function buildQuestionSelect(includeAnswers = false) {
-    const baseFields = 'questionNo question_no question questionText options subject chapter topic explanation';
+    const baseFields = 'questionNo question_no question questionText options subject difficulty chapter topic explanation';
     return includeAnswers ? `${baseFields} correctOptionIndex correctAnswer correct_answer` : baseFields;
 }
 
@@ -50,6 +56,50 @@ function buildSubjectRegex(subject) {
     if (subject === 'English') return /^english$/i;
     if (subject === 'Analytical') return /^(analytical|analysis|analytic)$/i;
     return new RegExp(`^${escapedRegex(subject)}$`, 'i');
+}
+
+function buildDifficultyRegex(difficulty) {
+    return new RegExp(`^${escapedRegex(difficulty)}$`, 'i');
+}
+
+function buildRecognizedSubjectFilter() {
+    return {
+        $or: SUBJECTS.map((subject) => ({ subject: buildSubjectRegex(subject) }))
+    };
+}
+
+function calculateQuizSubjectTargets(questionCount) {
+    const baseTargets = QUIZ_SUBJECT_WEIGHTS.map((item, index) => {
+        const rawCount = (questionCount * item.weight) / 100;
+        return {
+            ...item,
+            index,
+            count: Math.floor(rawCount),
+            remainder: rawCount - Math.floor(rawCount)
+        };
+    });
+
+    let remainingQuestions = questionCount - baseTargets.reduce((sum, item) => sum + item.count, 0);
+    const remainderOrder = [...baseTargets].sort((first, second) => {
+        if (second.remainder !== first.remainder) return second.remainder - first.remainder;
+        return first.index - second.index;
+    });
+
+    for (let index = 0; remainingQuestions > 0; index += 1) {
+        remainderOrder[index % remainderOrder.length].count += 1;
+        remainingQuestions -= 1;
+    }
+
+    return baseTargets.map(({ subject, count }) => ({ subject, count }));
+}
+
+function shuffleQuestions(questions) {
+    const shuffled = [...questions];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+    }
+    return shuffled;
 }
 
 function normalizeOptionText(value) {
@@ -318,6 +368,114 @@ exports.startPracticeExam = async (req, res) => {
     }
 };
 
+// @desc    Create a timed real-exam style quiz from count, duration, and difficulty
+// @route   POST /api/exams/quiz/start
+// @access  Private
+exports.startQuizExam = async (req, res) => {
+    try {
+        const questionCount = Number(req.body.questionCount);
+        const duration = Number(req.body.duration);
+        const difficulty = req.body.difficulty?.toString().trim();
+
+        if (!Number.isInteger(questionCount) || questionCount < 20) {
+            return res.status(400).json({ success: false, message: 'Please choose at least 20 questions for a quiz.' });
+        }
+
+        if (!Number.isInteger(duration) || duration < 1) {
+            return res.status(400).json({ success: false, message: 'Please choose a valid quiz duration in minutes.' });
+        }
+
+        if (!difficulty) {
+            return res.status(400).json({ success: false, message: 'Please choose a difficulty level before starting the quiz.' });
+        }
+
+        const difficultyRegex = buildDifficultyRegex(difficulty);
+        const quizBaseFilter = {
+            difficulty: difficultyRegex,
+            ...buildRecognizedSubjectFilter()
+        };
+        const totalAvailableQuestionCount = await QuestionBank.countDocuments(quizBaseFilter);
+
+        if (totalAvailableQuestionCount < questionCount) {
+            return res.status(400).json({
+                success: false,
+                message: `Only ${totalAvailableQuestionCount} ${difficulty} question${totalAvailableQuestionCount === 1 ? '' : 's'} are available for quiz generation.`
+            });
+        }
+
+        const subjectTargets = calculateQuizSubjectTargets(questionCount);
+        const selectedQuestions = [];
+        const selectedQuestionIds = [];
+
+        for (const target of subjectTargets) {
+            if (target.count < 1) continue;
+
+            const subjectQuestions = await QuestionBank.aggregate([
+                {
+                    $match: {
+                        difficulty: difficultyRegex,
+                        subject: buildSubjectRegex(target.subject)
+                    }
+                },
+                { $sample: { size: target.count } }
+            ]);
+
+            selectedQuestions.push(...subjectQuestions);
+            selectedQuestionIds.push(...subjectQuestions.map((question) => question._id));
+        }
+
+        const remainingQuestionCount = questionCount - selectedQuestions.length;
+        if (remainingQuestionCount > 0) {
+            const fillerQuestions = await QuestionBank.aggregate([
+                {
+                    $match: {
+                        difficulty: difficultyRegex,
+                        _id: { $nin: selectedQuestionIds },
+                        ...buildRecognizedSubjectFilter()
+                    }
+                },
+                { $sample: { size: remainingQuestionCount } }
+            ]);
+
+            selectedQuestions.push(...fillerQuestions);
+            selectedQuestionIds.push(...fillerQuestions.map((question) => question._id));
+        }
+
+        if (selectedQuestions.length < questionCount) {
+            return res.status(400).json({
+                success: false,
+                message: `Not enough ${difficulty} questions are available to build this quiz right now.`
+            });
+        }
+
+        const shuffledQuestions = shuffleQuestions(selectedQuestions).slice(0, questionCount);
+        const exam = await Exam.create({
+            title: `${difficulty} Quiz (${shuffledQuestions.length} Questions)`,
+            questions: shuffledQuestions.map((question) => question._id),
+            duration,
+            totalMarks: shuffledQuestions.length,
+            negativeMarksPerQuestion: 0.25,
+            examType: 'generatedQuiz',
+            allowRetakes: true,
+            isLiveExam: false
+        });
+
+        const normalizedQuestions = shuffledQuestions
+            .map(normalizeQuestionForClient)
+            .filter((question) => question?.questionText && Array.isArray(question.options) && question.options.length);
+
+        const responseExam = {
+            ...exam.toObject(),
+            questions: normalizedQuestions
+        };
+
+        res.status(201).json({ success: true, data: responseExam });
+    } catch (error) {
+        logExamError('startQuizExam', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // @desc    Create a new exam setup
 // @route   POST /api/exams
 // @access  Private/Admin
@@ -337,6 +495,10 @@ exports.createExam = async (req, res) => {
 // @access  Private
 exports.getExam = async (req, res) => {
     try {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(404).json({ success: false, message: 'Exam configuration not found' });
+        }
+
         // Populate the exam with actual question text and option arrays
         const exam = await Exam.findById(req.params.id).populate({
             path: 'questions',
