@@ -45,6 +45,10 @@ const ExamSchema = new mongoose.Schema({
     endTime: {
         type: Date // The exact moment submissions freeze
     },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
     createdAt: {
         type: Date,
         default: Date.now

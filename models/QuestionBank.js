@@ -54,9 +54,22 @@ const QuestionBankSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    subTopic: {
+        type: String,
+        trim: true
+    },
     explanation: {
         type: String,
         trim: true
+    },
+    source: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
     },
     createdAt: {
         type: Date,
