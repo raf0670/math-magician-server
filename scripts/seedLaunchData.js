@@ -6,11 +6,12 @@ const Exam = require('../models/Exam');
 const QuestionBank = require('../models/QuestionBank');
 const Submission = require('../models/Submission');
 const User = require('../models/User');
+const LIVE_EXAM_SOURCE = 'liveExam';
 
 async function seedLaunchData() {
   await connectDB();
 
-  const questions = await QuestionBank.find().limit(8);
+  const questions = await QuestionBank.find({ source: { $ne: LIVE_EXAM_SOURCE } }).limit(8);
   if (!questions.length) {
     console.log('No questions found. Skipping launch-data seed.');
     process.exit(0);

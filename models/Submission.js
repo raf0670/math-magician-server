@@ -27,7 +27,9 @@ const SubmissionSchema = new mongoose.Schema({
     }
 });
 
-// Create a compound index if you ever want to optimize queries looking for a specific exam's submissions sorted by score
+SubmissionSchema.index({ student: 1, exam: 1 }, { unique: true });
+
+// Optimize leaderboard-style queries for a specific exam.
 SubmissionSchema.index({ exam: 1, score: -1 });
 
 module.exports = mongoose.model('Submission', SubmissionSchema);

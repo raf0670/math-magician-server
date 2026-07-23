@@ -7,6 +7,9 @@ const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 const LIVE_EXAM_SOURCE = 'liveExam';
+const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
+const LIVE_EXAM_CACHE_GRACE_MS = Number(process.env.LIVE_EXAM_CACHE_GRACE_MS) || 10 * 60 * 1000;
+const liveExamCache = new Map();
 const QUIZ_SUBJECT_WEIGHTS = [
     { subject: 'English', weight: 45 },
     { subject: 'Math', weight: 35 },
@@ -94,6 +97,12 @@ function buildDifficultyRegex(difficulty) {
 function buildRecognizedSubjectFilter() {
     return {
         $or: SUBJECTS.map((subject) => ({ subject: buildSubjectRegex(subject) }))
+    };
+}
+
+function buildPracticeQuestionSourceFilter() {
+    return {
+        source: { $ne: LIVE_EXAM_SOURCE }
     };
 }
 
@@ -244,6 +253,126 @@ async function normalizePopulatedExam(exam, options = {}) {
     };
 }
 
+function getIdString(value) {
+    return value?._id?.toString?.() || value?.toString?.() || '';
+}
+
+function redactExamForStudent(exam) {
+    return {
+        ...exam,
+        questions: (exam.questions || []).map(redactQuestionAnswers)
+    };
+}
+
+function getLiveExamCacheExpiry(exam) {
+    const endTime = exam?.endTime ? new Date(exam.endTime).getTime() : 0;
+    const ttlExpiry = Date.now() + LIVE_EXAM_CACHE_TTL_MS;
+    if (!endTime || Number.isNaN(endTime)) return ttlExpiry;
+
+    return Math.min(ttlExpiry, endTime + LIVE_EXAM_CACHE_GRACE_MS);
+}
+
+function invalidateLiveExamCache(examId) {
+    const key = getIdString(examId);
+    if (key) liveExamCache.delete(key);
+}
+
+function getCachedLiveExam(examId) {
+    const key = getIdString(examId);
+    const cached = liveExamCache.get(key);
+
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached.exam;
+    }
+
+    if (cached) liveExamCache.delete(key);
+    return null;
+}
+
+async function getLiveExamWithQuestions(examId) {
+    const cachedExam = getCachedLiveExam(examId);
+    if (cachedExam) return cachedExam;
+
+    const key = getIdString(examId);
+    const exam = await Exam.findById(examId).populate({
+        path: 'questions',
+        select: buildQuestionSelect(true)
+    });
+
+    if (!exam) return null;
+
+    const normalizedExam = await normalizePopulatedExam(exam);
+    if (normalizedExam?.isLiveExam) {
+        liveExamCache.set(key, {
+            exam: normalizedExam,
+            expiresAt: getLiveExamCacheExpiry(normalizedExam)
+        });
+    }
+
+    return normalizedExam;
+}
+
+function gradeAnswers(normalizedExam, answers) {
+    const questions = normalizedExam.questions || [];
+    const totalQuestions = questions.length;
+    const penalty = getEffectiveNegativeMarksPerQuestion(normalizedExam.negativeMarksPerQuestion);
+    const review = [];
+    let dynamicScore = 0;
+
+    if (totalQuestions === 0) {
+        return {
+            score: 0,
+            totalMarks: normalizedExam.totalMarks || 0,
+            negativeMarksPerQuestion: penalty,
+            review
+        };
+    }
+
+    const marksPerQuestion = normalizedExam.totalMarks / totalQuestions;
+
+    questions.forEach((question, index) => {
+        const studentAnswer = answers[index];
+
+        if (studentAnswer === undefined || studentAnswer === null || studentAnswer === -1) {
+            review.push(buildQuestionReview(question, studentAnswer));
+            return;
+        }
+
+        if (studentAnswer === question.correctOptionIndex) {
+            dynamicScore += marksPerQuestion;
+        } else {
+            dynamicScore -= penalty;
+        }
+
+        review.push(buildQuestionReview(question, studentAnswer));
+    });
+
+    return {
+        score: parseFloat(dynamicScore.toFixed(2)),
+        totalMarks: normalizedExam.totalMarks,
+        negativeMarksPerQuestion: penalty,
+        review
+    };
+}
+
+function buildSubmissionResponse(submission, normalizedExam, options = {}) {
+    const graded = gradeAnswers(normalizedExam, submission.answers || []);
+
+    return {
+        success: true,
+        message: options.alreadySubmitted
+            ? 'Your answer sheet was already submitted. Showing the saved result.'
+            : 'Exam graded successfully!',
+        score: submission.score,
+        totalMarks: graded.totalMarks,
+        negativeMarksPerQuestion: graded.negativeMarksPerQuestion,
+        review: graded.review,
+        answers: submission.answers || [],
+        submissionId: submission._id,
+        alreadySubmitted: Boolean(options.alreadySubmitted)
+    };
+}
+
 function normalizeLabeledOption(option, index) {
     const text = clean(option);
     const label = OPTION_LABELS[index];
@@ -331,15 +460,20 @@ function parseLiveExamPayload(body = {}, userId) {
     };
 }
 
-function serializeExamSummary(exam, submissionByExamId = new Map()) {
+function serializeExamSummary(exam, submissionByExamId = new Map(), existingQuestionIdSet = null) {
     const plainExam = exam.toObject ? exam.toObject() : exam;
     const examId = plainExam._id?.toString();
     const submission = examId ? submissionByExamId.get(examId) : null;
+    const questionIds = (plainExam.questions || []).map(getIdString).filter(Boolean);
+    const questionCount = existingQuestionIdSet
+        ? questionIds.filter((questionId) => existingQuestionIdSet.has(questionId)).length
+        : questionIds.length;
 
     return {
         ...plainExam,
         status: getLiveExamStatus(plainExam),
-        questionCount: plainExam.questions?.length || 0,
+        questionCount,
+        missingQuestionCount: Math.max(0, questionIds.length - questionCount),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         hasSubmitted: Boolean(submission),
         submission: submission
@@ -401,6 +535,9 @@ exports.getPracticeMeta = async (req, res) => {
     try {
         const topicRows = await QuestionBank.aggregate([
             {
+                $match: buildPracticeQuestionSourceFilter()
+            },
+            {
                 $addFields: {
                     effectiveTopic: { $ifNull: ['$topic', '$chapter'] }
                 }
@@ -458,6 +595,7 @@ exports.startPracticeExam = async (req, res) => {
         const subjectRegex = buildSubjectRegex(subject);
         const topicRegex = new RegExp(`^${escapedRegex(topic)}$`, 'i');
         const questionFilter = {
+            ...buildPracticeQuestionSourceFilter(),
             subject: subjectRegex,
             $or: [
                 { topic: topicRegex },
@@ -538,6 +676,7 @@ exports.startQuizExam = async (req, res) => {
 
         const difficultyRegex = buildDifficultyRegex(difficulty);
         const quizBaseFilter = {
+            ...buildPracticeQuestionSourceFilter(),
             difficulty: difficultyRegex,
             ...buildRecognizedSubjectFilter()
         };
@@ -560,6 +699,7 @@ exports.startQuizExam = async (req, res) => {
             const subjectQuestions = await QuestionBank.aggregate([
                 {
                     $match: {
+                        ...buildPracticeQuestionSourceFilter(),
                         difficulty: difficultyRegex,
                         subject: buildSubjectRegex(target.subject)
                     }
@@ -576,6 +716,7 @@ exports.startQuizExam = async (req, res) => {
             const fillerQuestions = await QuestionBank.aggregate([
                 {
                     $match: {
+                        ...buildPracticeQuestionSourceFilter(),
                         difficulty: difficultyRegex,
                         _id: { $nin: selectedQuestionIds },
                         ...buildRecognizedSubjectFilter()
@@ -641,7 +782,14 @@ exports.getLiveExams = async (req, res) => {
             .select('exam score submittedAt')
             .lean();
         const submissionByExamId = new Map(submissions.map((submission) => [submission.exam.toString(), submission]));
-        const data = exams.map((exam) => serializeExamSummary(exam, submissionByExamId));
+        const questionIds = [...new Set(exams.flatMap((exam) => (
+            (exam.questions || []).map(getIdString).filter(Boolean)
+        )))];
+        const existingQuestions = questionIds.length
+            ? await QuestionBank.find({ _id: { $in: questionIds } }).select('_id').lean()
+            : [];
+        const existingQuestionIdSet = new Set(existingQuestions.map((question) => question._id.toString()));
+        const data = exams.map((exam) => serializeExamSummary(exam, submissionByExamId, existingQuestionIdSet));
 
         res.status(200).json({ success: true, count: data.length, data });
     } catch (error) {
@@ -709,6 +857,7 @@ exports.createLiveExam = async (req, res) => {
             })
             .populate('createdBy', 'name email');
 
+        invalidateLiveExamCache(exam._id);
         res.status(201).json({ success: true, data: await normalizePopulatedExam(populated) });
     } catch (error) {
         logExamError('createLiveExam', error);
@@ -765,6 +914,7 @@ exports.updateLiveExam = async (req, res) => {
             source: LIVE_EXAM_SOURCE
         });
 
+        invalidateLiveExamCache(updatedExam._id);
         res.status(200).json({ success: true, data: await normalizePopulatedExam(updatedExam) });
     } catch (error) {
         logExamError('updateLiveExam', error);
@@ -796,6 +946,35 @@ exports.getExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam configuration not found' });
         }
 
+        const cachedLiveExam = getCachedLiveExam(req.params.id);
+        const examMeta = cachedLiveExam || await Exam.findById(req.params.id)
+            .select('isLiveExam startTime endTime')
+            .lean();
+
+        if (!examMeta) {
+            return res.status(404).json({ success: false, message: 'Exam configuration not found' });
+        }
+
+        if (examMeta.isLiveExam) {
+            const liveExam = cachedLiveExam || await getLiveExamWithQuestions(req.params.id);
+            const currentTime = new Date();
+            const startTime = new Date(liveExam.startTime);
+            const endTime = new Date(liveExam.endTime);
+
+            if (currentTime < startTime) {
+                return res.status(403).json({
+                    success: false,
+                    message: `This live exam hasn't started yet. It will unlock at ${startTime.toLocaleString()}`
+                });
+            }
+
+            const includeAnswers = currentTime > endTime;
+            return res.status(200).json({
+                success: true,
+                data: includeAnswers ? liveExam : redactExamForStudent(liveExam)
+            });
+        }
+
         // Populate the exam with actual question text and option arrays
         const exam = await Exam.findById(req.params.id).populate({
             path: 'questions',
@@ -804,19 +983,6 @@ exports.getExam = async (req, res) => {
 
         if (!exam) {
             return res.status(404).json({ success: false, message: 'Exam configuration not found' });
-        }
-
-        if (exam.isLiveExam) {
-            const currentTime = new Date();
-            if (currentTime < exam.startTime) {
-                return res.status(403).json({
-                    success: false,
-                    message: `This live exam hasn't started yet. It will unlock at ${exam.startTime.toLocaleString()}`
-                });
-            }
-
-            const includeAnswers = currentTime > exam.endTime;
-            return res.status(200).json({ success: true, data: await normalizePopulatedExam(exam, { includeAnswers }) });
         }
 
         res.status(200).json({ success: true, data: await normalizePopulatedExam(exam) });
@@ -841,38 +1007,53 @@ exports.submitExam = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Please submit answers as an array of selected option indexes.' });
         }
 
-        const exam = await Exam.findById(req.params.id).populate('questions');
-
-        if (!exam) {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(404).json({ success: false, message: 'Exam not found' });
         }
 
-        // DOUBLE-SUBMISSION GUARD
-        if (!exam.allowRetakes) {
+        const examMeta = await Exam.findById(req.params.id)
+            .select('allowRetakes isLiveExam startTime endTime')
+            .lean();
+
+        if (!examMeta) {
+            return res.status(404).json({ success: false, message: 'Exam not found' });
+        }
+
+        const normalizedExam = examMeta.isLiveExam
+            ? await getLiveExamWithQuestions(req.params.id)
+            : await normalizePopulatedExam(await Exam.findById(req.params.id).populate({
+                path: 'questions',
+                select: buildQuestionSelect(true)
+            }));
+
+        if (!normalizedExam) {
+            return res.status(404).json({ success: false, message: 'Exam not found' });
+        }
+
+        if (!normalizedExam.allowRetakes) {
             const existingSubmission = await Submission.findOne({
                 student: studentId,
-                exam: exam._id
+                exam: normalizedExam._id
             });
 
             if (existingSubmission) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'You have already submitted this exam. Retakes are restricted.'
-                });
+                return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
             }
         }
 
-        // NEW LIVE EXAM DEADLINE GATE
-        if (exam.isLiveExam) {
+        if (normalizedExam.isLiveExam) {
             const currentTime = new Date();
-            if (currentTime < exam.startTime) {
+            const startTime = new Date(normalizedExam.startTime);
+            const endTime = new Date(normalizedExam.endTime);
+
+            if (currentTime < startTime) {
                 return res.status(403).json({
                     success: false,
                     message: 'This live exam has not started yet.'
                 });
             }
 
-            if (currentTime > exam.endTime) {
+            if (currentTime > endTime) {
                 return res.status(403).json({
                     success: false,
                     message: 'The submission portal has closed! You missed the official live exam deadline.'
@@ -880,58 +1061,34 @@ exports.submitExam = async (req, res) => {
             }
         }
 
-        let dynamicScore = 0;
-        const normalizedExam = await normalizePopulatedExam(exam);
         const questions = normalizedExam.questions || [];
         const totalQuestions = questions.length;
         if (totalQuestions === 0) {
             return res.status(400).json({ success: false, message: 'This exam has no available questions to grade.' });
         }
 
-        const marksPerQuestion = exam.totalMarks / totalQuestions;
+        const graded = gradeAnswers(normalizedExam, answers);
 
-        const penalty = getEffectiveNegativeMarksPerQuestion(exam.negativeMarksPerQuestion);
-        const review = [];
+        try {
+            const submission = await Submission.create({
+                student: studentId,
+                exam: normalizedExam._id,
+                answers,
+                score: graded.score
+            });
 
-        // Loop through questions to evaluate correct values
-        questions.forEach((question, index) => {
-            const studentAnswer = answers[index];
+            return res.status(201).json(buildSubmissionResponse(submission, normalizedExam));
+        } catch (error) {
+            if (error.code !== 11000) throw error;
 
-            // Case 1: Student skipped the question (represented as null or -1)
-            if (studentAnswer === undefined || studentAnswer === null || studentAnswer === -1) {
-                review.push(buildQuestionReview(question, studentAnswer));
-                return; // No points added, no penalty applied
-            }
+            const existingSubmission = await Submission.findOne({
+                student: studentId,
+                exam: normalizedExam._id
+            });
 
-            // Case 2: Correct Answer
-            if (studentAnswer === question.correctOptionIndex) {
-                dynamicScore += marksPerQuestion;
-            }
-            // Case 3: Wrong Answer (Apply Penalty)
-            else {
-                dynamicScore -= penalty;
-            }
-
-            review.push(buildQuestionReview(question, studentAnswer));
-        });
-
-        // Save student attempt profile to database
-        const submission = await Submission.create({
-            student: studentId,
-            exam: exam._id,
-            answers,
-            score: parseFloat(dynamicScore.toFixed(2))
-        });
-
-        res.status(201).json({
-            success: true,
-            message: 'Exam graded successfully!',
-            score: dynamicScore,
-            totalMarks: exam.totalMarks,
-            negativeMarksPerQuestion: penalty,
-            review,
-            submissionId: submission._id
-        });
+            if (!existingSubmission) throw error;
+            return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
+        }
 
     } catch (error) {
         logExamError('submitExam', error);

@@ -1,6 +1,32 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS) || 30000;
+const authUserCache = new Map();
+
+function getCachedUser(userId) {
+    const cached = authUserCache.get(userId);
+    if (!cached || cached.expiresAt <= Date.now()) {
+        authUserCache.delete(userId);
+        return null;
+    }
+
+    return cached.user;
+}
+
+function setCachedUser(user) {
+    const userId = user?._id?.toString();
+    if (!userId) return;
+
+    authUserCache.set(userId, {
+        user: {
+            ...user,
+            id: userId
+        },
+        expiresAt: Date.now() + AUTH_USER_CACHE_TTL_MS
+    });
+}
+
 // Middleware 1: Verify if the user is logged in via JWT
 exports.protect = async (req, res, next) => {
     let token;
@@ -14,8 +40,19 @@ exports.protect = async (req, res, next) => {
             // Verify the token using your unique JWT_SECRET string
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-            // Fetch the user from DB based on decoded ID, excluding the password field, and attach to request
-            req.user = await User.findById(decoded.id);
+            req.user = getCachedUser(decoded.id);
+
+            if (!req.user) {
+                // Fetch only request-scoped auth fields to reduce DB work during live-exam bursts.
+                const user = await User.findById(decoded.id)
+                    .select('name email role bio hasClassAccess')
+                    .lean();
+
+                if (user) {
+                    setCachedUser(user);
+                    req.user = getCachedUser(decoded.id);
+                }
+            }
 
             if (!req.user) {
                 return res.status(401).json({ success: false, message: 'Not authorized, user account was not found' });

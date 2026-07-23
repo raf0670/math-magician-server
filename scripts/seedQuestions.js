@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const path = require('path');
 const dotenv = require('dotenv');
 const QuestionBank = require('../models/QuestionBank');
+const LIVE_EXAM_SOURCE = 'liveExam';
 
 // Load environment variables by looking backwards out of the scripts folder
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
@@ -52,9 +53,9 @@ const seedDatabase = async () => {
         await mongoose.connect(process.env.MONGO_URI);
         console.log('🍃 Connected cleanly to MongoDB Atlas for seeding...');
 
-        // Clear out any existing questions so we don't duplicate data while testing
-        await QuestionBank.deleteMany();
-        console.log('🧹 Cleared old questions from QuestionBank collection.');
+        // Clear only reusable bank questions so seeded test data does not delete published live exams.
+        await QuestionBank.deleteMany({ source: { $ne: LIVE_EXAM_SOURCE } });
+        console.log('🧹 Cleared old non-live questions from QuestionBank collection.');
 
         // Insert the mock array in a single execution command
         await QuestionBank.insertMany(mockQuestions);
