@@ -46,10 +46,6 @@ exports.getGlobalLeaderboard = async (req, res) => {
                 $sort: { totalScore: -1, averageScore: -1, lastSubmittedAt: 1 }
             },
             {
-                // Limit response to top 100 students for performance efficiency
-                $limit: 100
-            },
-            {
                 // Lookup user details (name, email) from the users collection based on grouped _id
                 $lookup: {
                     from: 'users', // Name of the collection in MongoDB (usually lowercase plural)
@@ -81,8 +77,19 @@ exports.getGlobalLeaderboard = async (req, res) => {
             ...entry,
             rank: index + 1
         }));
+        const currentUserId = req.user._id?.toString() || req.user.id?.toString();
+        const currentUserEntry = rankedLeaderboard.find((entry) => (
+            entry.studentId?.toString() === currentUserId
+        )) || null;
+        const visibleLeaderboard = rankedLeaderboard.slice(0, 100);
 
-        res.status(200).json({ success: true, count: rankedLeaderboard.length, data: rankedLeaderboard });
+        res.status(200).json({
+            success: true,
+            count: visibleLeaderboard.length,
+            totalCount: rankedLeaderboard.length,
+            data: visibleLeaderboard,
+            currentUserEntry
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
