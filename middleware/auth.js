@@ -1,7 +1,9 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Payment = require('../models/Payment');
 
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS) || 30000;
+const APPROVED_ACCESS_STATUSES = ['approved', 'paid'];
 const authUserCache = new Map();
 
 function getCachedUser(userId) {
@@ -75,5 +77,36 @@ exports.authorizeAdmin = (req, res, next) => {
         next();
     } else {
         return res.status(403).json({ success: false, message: 'Access denied. Admins only.' });
+    }
+};
+
+exports.authorizeApprovedAccess = async (req, res, next) => {
+    try {
+        const user = req.user;
+
+        if (user?.role === 'admin' || user?.hasClassAccess) {
+            return next();
+        }
+
+        const hasApprovedPayment = await Payment.exists({
+            user: user._id,
+            status: { $in: APPROVED_ACCESS_STATUSES }
+        });
+
+        if (hasApprovedPayment) {
+            await User.findByIdAndUpdate(user._id, { hasClassAccess: true });
+            req.user = {
+                ...user,
+                hasClassAccess: true
+            };
+            return next();
+        }
+
+        return res.status(403).json({
+            success: false,
+            message: 'This section unlocks after admin approval.'
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
     }
 };

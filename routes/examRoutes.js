@@ -13,18 +13,18 @@ const {
     submitExam,
     updateLiveExam
 } = require('../controllers/examController');
-const { protect, authorizeAdmin } = require('../middleware/auth');
+const { protect, authorizeAdmin, authorizeApprovedAccess } = require('../middleware/auth');
 
-router.get('/', protect, getAllExams);
-router.get('/practice/meta', protect, getPracticeMeta);
-router.post('/practice/start', protect, startPracticeExam);
-router.post('/quiz/start', protect, startQuizExam);
-router.get('/live', protect, getLiveExams);
+router.get('/', protect, authorizeApprovedAccess, getAllExams);
+router.get('/practice/meta', protect, authorizeApprovedAccess, getPracticeMeta);
+router.post('/practice/start', protect, authorizeApprovedAccess, startPracticeExam);
+router.post('/quiz/start', protect, authorizeApprovedAccess, startQuizExam);
+router.get('/live', protect, authorizeApprovedAccess, getLiveExams);
 router.get('/live/admin', protect, authorizeAdmin, getAdminLiveExams);
 router.post('/live/admin', protect, authorizeAdmin, createLiveExam);
 router.patch('/live/admin/:id', protect, authorizeAdmin, updateLiveExam);
 router.post('/', protect, authorizeAdmin, createExam);
-router.get('/:id', protect, getExam);
-router.post('/:id/submit', protect, submitExam);
+router.get('/:id', protect, authorizeApprovedAccess, getExam);
+router.post('/:id/submit', protect, authorizeApprovedAccess, submitExam);
 
 module.exports = router;

@@ -180,7 +180,7 @@ exports.getPaymentAccess = async (req, res) => {
             user: req.user._id,
             status: { $in: APPROVED_ACCESS_STATUSES }
         });
-        const hasClassAccess = Boolean(req.user.hasClassAccess || hasApprovedPayment);
+        const hasClassAccess = Boolean(req.user.role === 'admin' || req.user.hasClassAccess || hasApprovedPayment);
 
         if (hasApprovedPayment && !req.user.hasClassAccess) {
             await User.findByIdAndUpdate(req.user._id, { hasClassAccess: true });

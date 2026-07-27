@@ -1,8 +1,4 @@
 const LiveClass = require('../models/LiveClass');
-const Payment = require('../models/Payment');
-const User = require('../models/User');
-
-const APPROVED_ACCESS_STATUSES = ['approved', 'paid'];
 
 function clean(value) {
     return value?.toString().trim() || '';
@@ -46,32 +42,8 @@ function parseClassPayload(body = {}) {
     };
 }
 
-async function userHasClassAccess(user) {
-    if (user.role === 'admin' || user.hasClassAccess) return true;
-
-    const hasApprovedPayment = await Payment.exists({
-        user: user._id,
-        status: { $in: APPROVED_ACCESS_STATUSES }
-    });
-
-    if (hasApprovedPayment) {
-        await User.findByIdAndUpdate(user._id, { hasClassAccess: true });
-    }
-
-    return Boolean(hasApprovedPayment);
-}
-
 exports.getCurrentLiveClass = async (req, res) => {
     try {
-        const hasAccess = await userHasClassAccess(req.user);
-
-        if (!hasAccess) {
-            return res.status(403).json({
-                success: false,
-                message: 'Classes unlock after admin approval.'
-            });
-        }
-
         const now = new Date();
         const liveClass = await LiveClass.findOne({ endsAt: { $gte: now } })
             .sort({ startsAt: 1 })

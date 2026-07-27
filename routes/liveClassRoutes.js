@@ -6,9 +6,9 @@ const {
     getCurrentLiveClass,
     updateLiveClass
 } = require('../controllers/liveClassController');
-const { protect, authorizeAdmin } = require('../middleware/auth');
+const { protect, authorizeAdmin, authorizeApprovedAccess } = require('../middleware/auth');
 
-router.get('/current', protect, getCurrentLiveClass);
+router.get('/current', protect, authorizeApprovedAccess, getCurrentLiveClass);
 router.get('/admin', protect, authorizeAdmin, getAdminLiveClasses);
 router.post('/admin', protect, authorizeAdmin, createLiveClass);
 router.patch('/admin/:id', protect, authorizeAdmin, updateLiveClass);
