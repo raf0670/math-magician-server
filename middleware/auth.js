@@ -47,7 +47,7 @@ exports.protect = async (req, res, next) => {
             if (!req.user) {
                 // Fetch only request-scoped auth fields to reduce DB work during live-exam bursts.
                 const user = await User.findById(decoded.id)
-                    .select('name email role bio hasClassAccess')
+                    .select('name email role bio hasClassAccess paymentStatus')
                     .lean();
 
                 if (user) {
@@ -88,16 +88,28 @@ exports.authorizeApprovedAccess = async (req, res, next) => {
             return next();
         }
 
-        const hasApprovedPayment = await Payment.exists({
+        const approvedPayments = await Payment.find({
             user: user._id,
             status: { $in: APPROVED_ACCESS_STATUSES }
-        });
+        }).select('paymentChoice remainingAmount fullyPaidAt').lean();
 
-        if (hasApprovedPayment) {
-            await User.findByIdAndUpdate(user._id, { hasClassAccess: true });
+        if (approvedPayments.length) {
+            const hasFullyPaid = approvedPayments.some((payment) => {
+                const paymentChoice = payment.paymentChoice || 'full';
+                return paymentChoice === 'full'
+                    || payment.remainingAmount === 0
+                    || Boolean(payment.fullyPaidAt);
+            });
+            const paymentStatus = hasFullyPaid ? 'fullyPaid' : 'partiallyPaid';
+
+            await User.findByIdAndUpdate(user._id, {
+                hasClassAccess: true,
+                paymentStatus
+            });
             req.user = {
                 ...user,
-                hasClassAccess: true
+                hasClassAccess: true,
+                paymentStatus
             };
             return next();
         }

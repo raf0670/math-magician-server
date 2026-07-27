@@ -34,7 +34,7 @@ exports.register = async (req, res) => {
         res.status(201).json({
             success: true,
             token,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess) }
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess), paymentStatus: user.paymentStatus || 'unpaid' }
         });
 
     } catch (error) {
@@ -69,7 +69,7 @@ exports.login = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess) }
+            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess), paymentStatus: user.paymentStatus || 'unpaid' }
         });
 
     } catch (error) {
@@ -82,15 +82,24 @@ exports.login = async (req, res) => {
 // @access  Private
 exports.getMe = async (req, res) => {
     try {
+        const user = await User.findById(req.user._id)
+            .select('name email role bio hasClassAccess paymentStatus')
+            .lean();
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User account was not found' });
+        }
+
         res.status(200).json({
             success: true,
             data: {
-                id: req.user._id,
-                name: req.user.name,
-                email: req.user.email,
-                role: req.user.role,
-                bio: req.user.bio || '',
-                hasClassAccess: Boolean(req.user.hasClassAccess)
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                bio: user.bio || '',
+                hasClassAccess: Boolean(user.hasClassAccess),
+                paymentStatus: user.paymentStatus || 'unpaid'
             }
         });
     } catch (error) {
@@ -130,7 +139,8 @@ exports.updateProfile = async (req, res) => {
                 email: user.email,
                 role: user.role,
                 bio: user.bio || '',
-                hasClassAccess: Boolean(user.hasClassAccess)
+                hasClassAccess: Boolean(user.hasClassAccess),
+                paymentStatus: user.paymentStatus || 'unpaid'
             }
         });
     } catch (error) {

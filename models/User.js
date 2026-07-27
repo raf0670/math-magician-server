@@ -41,6 +41,12 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    paymentStatus: {
+        type: String,
+        enum: ['unpaid', 'partiallyPaid', 'fullyPaid'],
+        default: 'unpaid',
+        index: true
+    },
     createdAt: {
         type: Date,
         default: Date.now

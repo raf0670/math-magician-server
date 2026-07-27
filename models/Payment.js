@@ -27,6 +27,26 @@ const PaymentSchema = new mongoose.Schema({
         required: true,
         min: 1
     },
+    paymentChoice: {
+        type: String,
+        enum: ['full', 'partial'],
+        default: 'full',
+        index: true
+    },
+    paidAmount: {
+        type: Number,
+        min: 1
+    },
+    remainingAmount: {
+        type: Number,
+        min: 0,
+        default: 0
+    },
+    deliveryMode: {
+        type: String,
+        enum: ['online', 'offline'],
+        index: true
+    },
     currency: {
         type: String,
         default: 'BDT'
@@ -60,6 +80,21 @@ const PaymentSchema = new mongoose.Schema({
         sparse: true,
         index: true
     },
+    finalTrxID: {
+        type: String,
+        trim: true
+    },
+    finalTrxIDNormalized: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        unique: true,
+        sparse: true,
+        index: true
+    },
+    fullyPaidAt: {
+        type: Date
+    },
     reviewedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -91,6 +126,15 @@ PaymentSchema.pre('validate', function normalizeTransactionId() {
     if (this.trxID) {
         this.trxID = this.trxID.trim();
         this.trxIDNormalized = this.trxID.toUpperCase();
+    }
+
+    if (this.finalTrxID) {
+        this.finalTrxID = this.finalTrxID.trim();
+        this.finalTrxIDNormalized = this.finalTrxID.toUpperCase();
+    }
+
+    if (!this.paidAmount) {
+        this.paidAmount = this.amount;
     }
 });
 
