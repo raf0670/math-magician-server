@@ -20,6 +20,17 @@ const UserSchema = new mongoose.Schema({
         minlength: [6, 'Password must be at least 6 characters long'],
         select: false // This prevents the password from being returned in API responses by default (for security)
     },
+    resetPasswordToken: {
+        type: String,
+        select: false
+    },
+    resetPasswordExpires: {
+        type: Date,
+        index: true
+    },
+    resetPasswordRequestedAt: {
+        type: Date
+    },
     role: {
         type: String,
         enum: ['student', 'admin'],

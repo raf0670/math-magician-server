@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, getMe, updateProfile, changePassword } = require('../controllers/authController');
+const { register, login, forgotPassword, resetPassword, getMe, updateProfile, changePassword } = require('../controllers/authController');
 const { protect, authorizeAdmin } = require('../middleware/auth');
 
 // Public routes
 router.post('/register', register);
 router.post('/login', login);
+router.post('/forgot-password', forgotPassword);
+router.put('/reset-password/:token', resetPassword);
 
 // Private/Protected Route Example (Accessible by logged-in users only)
 router.get('/me', protect, getMe);
