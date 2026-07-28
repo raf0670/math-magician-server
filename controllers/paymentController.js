@@ -27,9 +27,24 @@ const REQUIRED_FORM_FIELDS = [
     ...STUDENT_FORM_FIELDS,
     'bkashTrxID'
 ];
+const FACEBOOK_LINK_ERROR = 'Please enter a valid Facebook profile link.';
 
 function clean(value) {
     return value?.toString().trim() || '';
+}
+
+function isFacebookProfileLink(value) {
+    const trimmedValue = clean(value);
+    if (!trimmedValue) return false;
+
+    try {
+        const url = new URL(trimmedValue);
+        const hostname = url.hostname.toLowerCase();
+        return ['http:', 'https:'].includes(url.protocol)
+            && (hostname === 'facebook.com' || hostname.endsWith('.facebook.com'));
+    } catch {
+        return false;
+    }
 }
 
 function getBackupChoices(formData) {
@@ -263,6 +278,14 @@ exports.submitManualEnrollment = async (req, res) => {
             });
         }
 
+        if (!isFacebookProfileLink(formData.facebookProfile)) {
+            return res.status(400).json({
+                success: false,
+                message: FACEBOOK_LINK_ERROR,
+                invalidFields: ['facebookProfile']
+            });
+        }
+
         const bkashTrxID = getFormValue(formData, 'bkashTrxID');
         const existingPayment = await findExistingTransaction(bkashTrxID);
 
@@ -344,6 +367,14 @@ exports.submitSeatBooking = async (req, res) => {
                 success: false,
                 message: 'Please complete all required booking fields.',
                 missingFields
+            });
+        }
+
+        if (!isFacebookProfileLink(formData.facebookProfile)) {
+            return res.status(400).json({
+                success: false,
+                message: FACEBOOK_LINK_ERROR,
+                invalidFields: ['facebookProfile']
             });
         }
 
