@@ -1,13 +1,15 @@
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
+const SeatBooking = require('../models/SeatBooking');
 const { getPaymentPlan } = require('../config/paymentPlans');
 
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'];
 const APPROVED_ACCESS_STATUSES = ['approved', 'paid'];
 const PAYMENT_CHOICES = ['full', 'partial'];
+const PAYMENT_METHODS = ['bkash', 'bank'];
 const PARTIAL_PAYMENT_AMOUNT = 10000;
-const REQUIRED_FORM_FIELDS = [
+const STUDENT_FORM_FIELDS = [
     'email',
     'yourName',
     'address',
@@ -19,7 +21,10 @@ const REQUIRED_FORM_FIELDS = [
     'hscBatch',
     'backupChoice',
     'admissionSystemIdea',
-    'preferredBatch',
+    'preferredBatch'
+];
+const REQUIRED_FORM_FIELDS = [
+    ...STUDENT_FORM_FIELDS,
     'bkashTrxID'
 ];
 
@@ -58,6 +63,73 @@ function validateManualEnrollmentForm(formData) {
     return missingFields;
 }
 
+function validateSeatBookingForm(formData) {
+    return STUDENT_FORM_FIELDS.filter((field) => {
+        if (field === 'backupChoice') {
+            return !getBackupChoices(formData).length;
+        }
+
+        return !getFormValue(formData, field);
+    });
+}
+
+function getPaymentMethod(value) {
+    const paymentMethod = clean(value || 'bkash').toLowerCase();
+    return PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : '';
+}
+
+async function findExistingTransaction(trxID, excludedPaymentId = null) {
+    const trxIDNormalized = clean(trxID).toUpperCase();
+    if (!trxIDNormalized) return null;
+
+    const filter = {
+        $or: [
+            { trxIDNormalized },
+            { finalTrxIDNormalized: trxIDNormalized }
+        ]
+    };
+
+    if (excludedPaymentId) {
+        filter._id = { $ne: excludedPaymentId };
+    }
+
+    return Payment.findOne(filter);
+}
+
+function getStudentDetailPayload(source) {
+    return {
+        email: getFormValue(source, 'email'),
+        yourName: getFormValue(source, 'yourName'),
+        address: getFormValue(source, 'address'),
+        phoneNumber: getFormValue(source, 'phoneNumber'),
+        facebookProfile: getFormValue(source, 'facebookProfile'),
+        emailAddress: getFormValue(source, 'emailAddress'),
+        college: getFormValue(source, 'college'),
+        group: getFormValue(source, 'group'),
+        hscBatch: getFormValue(source, 'hscBatch'),
+        backupChoice: getBackupChoices(source),
+        admissionSystemIdea: getFormValue(source, 'admissionSystemIdea'),
+        previousIbaPreparation: getFormValue(source, 'previousIbaPreparation'),
+        previousStudyDetails: getFormValue(source, 'previousStudyDetails'),
+        strongestSection: getFormValue(source, 'strongestSection'),
+        weakestSection: getFormValue(source, 'weakestSection'),
+        preferredBatch: getFormValue(source, 'preferredBatch')
+    };
+}
+
+function formatSeatBooking(booking) {
+    if (!booking) return null;
+
+    return {
+        bookingId: booking._id,
+        planId: booking.planId,
+        planTitle: booking.planTitle,
+        createdAt: booking.createdAt,
+        updatedAt: booking.updatedAt,
+        student: getStudentDetailPayload(booking)
+    };
+}
+
 function formatEnrollmentForAdmin(payment, detail) {
     return {
         paymentId: payment._id,
@@ -71,6 +143,7 @@ function formatEnrollmentForAdmin(payment, detail) {
         deliveryMode: payment.deliveryMode || getPaymentPlan(payment.planId)?.deliveryMode || '',
         currency: payment.currency,
         status: payment.status,
+        paymentMethod: payment.paymentMethod || payment.provider || 'bkash',
         bkashTrxID: payment.trxID,
         finalTrxID: payment.finalTrxID,
         merchantInvoiceNumber: payment.merchantInvoiceNumber,
@@ -144,6 +217,7 @@ exports.submitManualEnrollment = async (req, res) => {
     try {
         const { planId, formData } = req.body;
         const paymentChoice = clean(req.body.paymentChoice || 'full');
+        const paymentMethod = getPaymentMethod(req.body.paymentMethod || formData?.paymentMethod);
         const plan = getPaymentPlan(planId);
 
         if (!plan) {
@@ -152,6 +226,10 @@ exports.submitManualEnrollment = async (req, res) => {
 
         if (!PAYMENT_CHOICES.includes(paymentChoice)) {
             return res.status(400).json({ success: false, message: 'Payment choice must be full or partial.' });
+        }
+
+        if (!paymentMethod) {
+            return res.status(400).json({ success: false, message: 'Payment method must be bkash or bank.' });
         }
 
         if (!formData || typeof formData !== 'object') {
@@ -168,18 +246,12 @@ exports.submitManualEnrollment = async (req, res) => {
         }
 
         const bkashTrxID = getFormValue(formData, 'bkashTrxID');
-        const trxIDNormalized = bkashTrxID.toUpperCase();
-        const existingPayment = await Payment.findOne({
-            $or: [
-                { trxIDNormalized },
-                { finalTrxIDNormalized: trxIDNormalized }
-            ]
-        });
+        const existingPayment = await findExistingTransaction(bkashTrxID);
 
         if (existingPayment) {
             return res.status(409).json({
                 success: false,
-                message: 'This bKash transaction ID has already been submitted.'
+                message: 'This transaction ID has already been submitted.'
             });
         }
 
@@ -193,6 +265,8 @@ exports.submitManualEnrollment = async (req, res) => {
             paidAmount: paymentMeta.paidAmount,
             remainingAmount: paymentMeta.remainingAmount,
             deliveryMode: paymentMeta.deliveryMode,
+            provider: paymentMethod,
+            paymentMethod,
             merchantInvoiceNumber: makeInvoiceNumber(req.user._id),
             status: 'pending',
             trxID: bkashTrxID
@@ -204,22 +278,8 @@ exports.submitManualEnrollment = async (req, res) => {
             planId: payment.planId,
             planTitle: payment.planTitle,
             bkashTrxID,
-            email: getFormValue(formData, 'email'),
-            yourName: getFormValue(formData, 'yourName'),
-            address: getFormValue(formData, 'address'),
-            phoneNumber: getFormValue(formData, 'phoneNumber'),
-            facebookProfile: getFormValue(formData, 'facebookProfile'),
-            emailAddress: getFormValue(formData, 'emailAddress'),
-            college: getFormValue(formData, 'college'),
-            group: getFormValue(formData, 'group'),
-            hscBatch: getFormValue(formData, 'hscBatch'),
-            backupChoice: getBackupChoices(formData),
-            admissionSystemIdea: getFormValue(formData, 'admissionSystemIdea'),
-            previousIbaPreparation: getFormValue(formData, 'previousIbaPreparation'),
-            previousStudyDetails: getFormValue(formData, 'previousStudyDetails'),
-            strongestSection: getFormValue(formData, 'strongestSection'),
-            weakestSection: getFormValue(formData, 'weakestSection'),
-            preferredBatch: getFormValue(formData, 'preferredBatch')
+            paymentMethod,
+            ...getStudentDetailPayload(formData)
         });
 
         res.status(201).json({
@@ -232,13 +292,192 @@ exports.submitManualEnrollment = async (req, res) => {
                 paidAmount: payment.paidAmount,
                 remainingAmount: payment.remainingAmount,
                 deliveryMode: payment.deliveryMode,
+                paymentMethod: payment.paymentMethod,
                 bkashTrxID: payment.trxID,
                 enrollmentId: detail._id
             }
         });
     } catch (error) {
         if (error.code === 11000) {
-            return res.status(409).json({ success: false, message: 'This bKash transaction ID has already been submitted.' });
+            return res.status(409).json({ success: false, message: 'This transaction ID has already been submitted.' });
+        }
+
+        const status = error.name === 'ValidationError' ? 400 : 500;
+        res.status(status).json({ success: false, message: error.message });
+    }
+};
+
+exports.submitSeatBooking = async (req, res) => {
+    try {
+        const { planId, formData } = req.body;
+        const plan = getPaymentPlan(planId);
+
+        if (!plan) {
+            return res.status(400).json({ success: false, message: 'Invalid payment plan.' });
+        }
+
+        if (!formData || typeof formData !== 'object') {
+            return res.status(400).json({ success: false, message: 'Booking form details are required.' });
+        }
+
+        const missingFields = validateSeatBookingForm(formData);
+        if (missingFields.length) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please complete all required booking fields.',
+                missingFields
+            });
+        }
+
+        const bookingPayload = {
+            user: req.user._id,
+            planId: plan.id,
+            planTitle: plan.title,
+            ...getStudentDetailPayload(formData)
+        };
+
+        const booking = await SeatBooking.findOneAndUpdate(
+            { user: req.user._id },
+            bookingPayload,
+            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+        ).lean();
+
+        const user = await User.findByIdAndUpdate(
+            req.user._id,
+            {
+                hasBooked: true,
+                bookedPlanId: plan.id,
+                bookedAt: new Date(),
+                hasClassAccess: false,
+                paymentStatus: 'unpaid'
+            },
+            { new: true, runValidators: true }
+        ).select('name email role bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus').lean();
+
+        res.status(201).json({
+            success: true,
+            message: 'Seat booked successfully.',
+            data: {
+                booking: formatSeatBooking(booking),
+                user: user ? {
+                    id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    role: user.role,
+                    bio: user.bio || '',
+                    hasClassAccess: Boolean(user.hasClassAccess),
+                    hasBooked: Boolean(user.hasBooked),
+                    bookedPlanId: user.bookedPlanId || '',
+                    bookedAt: user.bookedAt || null,
+                    paymentStatus: user.paymentStatus || 'unpaid'
+                } : null
+            }
+        });
+    } catch (error) {
+        const status = error.name === 'ValidationError' ? 400 : 500;
+        res.status(status).json({ success: false, message: error.message });
+    }
+};
+
+exports.getMyBooking = async (req, res) => {
+    try {
+        const booking = await SeatBooking.findOne({ user: req.user._id }).lean();
+
+        res.status(200).json({
+            success: true,
+            data: {
+                hasBooked: Boolean(booking || req.user.hasBooked),
+                bookedPlanId: booking?.planId || req.user.bookedPlanId || '',
+                bookedAt: booking?.createdAt || req.user.bookedAt || null,
+                booking: formatSeatBooking(booking)
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.submitBookedCheckout = async (req, res) => {
+    try {
+        const paymentChoice = clean(req.body.paymentChoice || 'full');
+        const paymentMethod = getPaymentMethod(req.body.paymentMethod);
+        const trxID = clean(req.body.trxID || req.body.bkashTrxID || req.body.transactionId);
+        const booking = await SeatBooking.findOne({ user: req.user._id }).lean();
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: 'Please book a seat before checkout.' });
+        }
+
+        if (!PAYMENT_CHOICES.includes(paymentChoice)) {
+            return res.status(400).json({ success: false, message: 'Payment choice must be full or partial.' });
+        }
+
+        if (!paymentMethod) {
+            return res.status(400).json({ success: false, message: 'Payment method must be bkash or bank.' });
+        }
+
+        if (!trxID) {
+            return res.status(400).json({ success: false, message: 'Transaction ID or reference is required.' });
+        }
+
+        const plan = getPaymentPlan(booking.planId);
+        if (!plan) {
+            return res.status(400).json({ success: false, message: 'The booked payment plan is no longer available.' });
+        }
+
+        const existingPayment = await findExistingTransaction(trxID);
+        if (existingPayment) {
+            return res.status(409).json({
+                success: false,
+                message: 'This transaction ID has already been submitted.'
+            });
+        }
+
+        const paymentMeta = getPlanPaymentMeta(plan, paymentChoice);
+        const payment = await Payment.create({
+            user: req.user._id,
+            planId: plan.id,
+            planTitle: plan.title,
+            amount: paymentMeta.amount,
+            paymentChoice: paymentMeta.paymentChoice,
+            paidAmount: paymentMeta.paidAmount,
+            remainingAmount: paymentMeta.remainingAmount,
+            deliveryMode: paymentMeta.deliveryMode,
+            provider: paymentMethod,
+            paymentMethod,
+            merchantInvoiceNumber: makeInvoiceNumber(req.user._id),
+            status: 'pending',
+            trxID
+        });
+
+        const detail = await EnrollmentDetail.create({
+            user: req.user._id,
+            payment: payment._id,
+            planId: payment.planId,
+            planTitle: payment.planTitle,
+            bkashTrxID: trxID,
+            paymentMethod,
+            ...getStudentDetailPayload(booking)
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Payment submitted for admin review.',
+            data: {
+                paymentId: payment._id,
+                status: payment.status,
+                paymentChoice: payment.paymentChoice,
+                paidAmount: payment.paidAmount,
+                remainingAmount: payment.remainingAmount,
+                deliveryMode: payment.deliveryMode,
+                paymentMethod: payment.paymentMethod,
+                bkashTrxID: payment.trxID,
+                enrollmentId: detail._id
+            }
+        });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ success: false, message: 'This transaction ID has already been submitted.' });
         }
 
         const status = error.name === 'ValidationError' ? 400 : 500;
@@ -253,18 +492,25 @@ exports.getPaymentAccess = async (req, res) => {
                 success: true,
                 data: {
                     hasClassAccess: true,
-                    paymentStatus: 'fullyPaid'
+                    paymentStatus: 'fullyPaid',
+                    hasBooked: Boolean(req.user.hasBooked),
+                    bookedPlanId: req.user.bookedPlanId || '',
+                    bookedAt: req.user.bookedAt || null
                 }
             });
         }
 
         const access = await syncUserPaymentAccess(req.user._id);
+        const booking = await SeatBooking.findOne({ user: req.user._id }).select('planId createdAt').lean();
 
         res.status(200).json({
             success: true,
             data: {
                 hasClassAccess: Boolean(req.user.hasClassAccess || access.hasClassAccess),
-                paymentStatus: access.paymentStatus
+                paymentStatus: access.paymentStatus,
+                hasBooked: Boolean(booking || req.user.hasBooked),
+                bookedPlanId: booking?.planId || req.user.bookedPlanId || '',
+                bookedAt: booking?.createdAt || req.user.bookedAt || null
             }
         });
     } catch (error) {
@@ -369,18 +615,12 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
         }
 
         const finalTrxIDNormalized = finalTrxID.toUpperCase();
-        const existingPayment = await Payment.findOne({
-            _id: { $ne: req.params.paymentId },
-            $or: [
-                { trxIDNormalized: finalTrxIDNormalized },
-                { finalTrxIDNormalized }
-            ]
-        });
+        const existingPayment = await findExistingTransaction(finalTrxID, req.params.paymentId);
 
         if (existingPayment) {
             return res.status(409).json({
                 success: false,
-                message: 'This bKash transaction ID has already been submitted.'
+                message: 'This transaction ID has already been submitted.'
             });
         }
 
@@ -434,7 +674,7 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
         });
     } catch (error) {
         if (error.code === 11000) {
-            return res.status(409).json({ success: false, message: 'This bKash transaction ID has already been submitted.' });
+            return res.status(409).json({ success: false, message: 'This transaction ID has already been submitted.' });
         }
 
         const responseStatus = error.name === 'ValidationError' ? 400 : 500;

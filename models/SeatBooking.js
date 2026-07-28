@@ -2,16 +2,10 @@ const mongoose = require('mongoose');
 
 const BACKUP_CHOICES = ['IBA JU', 'BUP BBA Gen', 'BUP FBS', 'DU B/C unit', 'Engineering', 'Medical', 'DU A unit', 'Private Uni', 'Abroad'];
 
-const EnrollmentDetailSchema = new mongoose.Schema({
+const SeatBookingSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
-        index: true
-    },
-    payment: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Payment',
         required: true,
         unique: true,
         index: true
@@ -25,16 +19,6 @@ const EnrollmentDetailSchema = new mongoose.Schema({
         type: String,
         required: true,
         trim: true
-    },
-    bkashTrxID: {
-        type: String,
-        required: true,
-        trim: true
-    },
-    paymentMethod: {
-        type: String,
-        enum: ['bkash', 'bank'],
-        default: 'bkash'
     },
     email: {
         type: String,
@@ -126,4 +110,4 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-module.exports = mongoose.model('EnrollmentDetail', EnrollmentDetailSchema);
+module.exports = mongoose.model('SeatBooking', SeatBookingSchema);

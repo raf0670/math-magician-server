@@ -9,8 +9,14 @@ const PaymentSchema = new mongoose.Schema({
     },
     provider: {
         type: String,
-        enum: ['bkash'],
+        enum: ['bkash', 'bank'],
         default: 'bkash'
+    },
+    paymentMethod: {
+        type: String,
+        enum: ['bkash', 'bank'],
+        default: 'bkash',
+        index: true
     },
     planId: {
         type: String,

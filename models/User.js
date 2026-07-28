@@ -41,6 +41,19 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    hasBooked: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    bookedPlanId: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    bookedAt: {
+        type: Date
+    },
     paymentStatus: {
         type: String,
         enum: ['unpaid', 'partiallyPaid', 'fullyPaid'],

@@ -2,6 +2,21 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+function formatAuthUser(user) {
+    return {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        bio: user.bio || '',
+        hasClassAccess: Boolean(user.hasClassAccess),
+        hasBooked: Boolean(user.hasBooked),
+        bookedPlanId: user.bookedPlanId || '',
+        bookedAt: user.bookedAt || null,
+        paymentStatus: user.paymentStatus || 'unpaid'
+    };
+}
+
 // @desc    Register a new user
 // @route   POST /api/auth/register
 // @access  Public
@@ -34,7 +49,7 @@ exports.register = async (req, res) => {
         res.status(201).json({
             success: true,
             token,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess), paymentStatus: user.paymentStatus || 'unpaid' }
+            user: formatAuthUser(user)
         });
 
     } catch (error) {
@@ -69,7 +84,7 @@ exports.login = async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            user: { id: user._id, name: user.name, email: user.email, role: user.role, bio: user.bio || '', hasClassAccess: Boolean(user.hasClassAccess), paymentStatus: user.paymentStatus || 'unpaid' }
+            user: formatAuthUser(user)
         });
 
     } catch (error) {
@@ -83,7 +98,7 @@ exports.login = async (req, res) => {
 exports.getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
-            .select('name email role bio hasClassAccess paymentStatus')
+            .select('name email role bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus')
             .lean();
 
         if (!user) {
@@ -92,15 +107,7 @@ exports.getMe = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                bio: user.bio || '',
-                hasClassAccess: Boolean(user.hasClassAccess),
-                paymentStatus: user.paymentStatus || 'unpaid'
-            }
+            data: formatAuthUser(user)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -133,15 +140,7 @@ exports.updateProfile = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                bio: user.bio || '',
-                hasClassAccess: Boolean(user.hasClassAccess),
-                paymentStatus: user.paymentStatus || 'unpaid'
-            }
+            data: formatAuthUser(user)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
