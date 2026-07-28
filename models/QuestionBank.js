@@ -7,6 +7,10 @@ const QuestionBankSchema = new mongoose.Schema({
     question_no: {
         type: Number
     },
+    set_number: {
+        type: Number,
+        index: true
+    },
     question: {
         type: String,
         trim: true

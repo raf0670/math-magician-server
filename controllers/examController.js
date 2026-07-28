@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
+const PUZZLE_TOPIC_REGEX = /^puzzle$/i;
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 const LIVE_EXAM_SOURCE = 'liveExam';
 const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
@@ -37,7 +38,7 @@ function buildOfficialExamFilter() {
 }
 
 function buildQuestionSelect(includeAnswers = false) {
-    const baseFields = 'questionNo question_no question questionText options subject difficulty chapter topic subTopic explanation source createdBy';
+    const baseFields = 'questionNo question_no set_number question questionText options subject difficulty chapter topic subTopic explanation source createdBy';
     return includeAnswers ? `${baseFields} correctOptionIndex correctAnswer correct_answer` : baseFields;
 }
 
@@ -106,6 +107,46 @@ function buildPracticeQuestionSourceFilter() {
     };
 }
 
+function buildPuzzleTopicFilter() {
+    return {
+        $or: [
+            { topic: PUZZLE_TOPIC_REGEX },
+            { chapter: PUZZLE_TOPIC_REGEX }
+        ]
+    };
+}
+
+function buildNotPuzzleTopicFilter() {
+    return {
+        $nor: [
+            { topic: PUZZLE_TOPIC_REGEX },
+            { chapter: PUZZLE_TOPIC_REGEX }
+        ]
+    };
+}
+
+function withExcludedQuestionIds(filter, excludedQuestionIds = []) {
+    const ids = excludedQuestionIds.filter(Boolean);
+    if (!ids.length) return filter;
+
+    return {
+        $and: [
+            filter,
+            { _id: { $nin: ids } }
+        ]
+    };
+}
+
+function buildFilter(...filters) {
+    const activeFilters = filters.filter(Boolean);
+    if (activeFilters.length === 1) return activeFilters[0];
+    return { $and: activeFilters };
+}
+
+function isAnalyticalPuzzleRequest(subject, topic) {
+    return normalizeSubject(subject) === 'Analytical' && PUZZLE_TOPIC_REGEX.test(topic || '');
+}
+
 function calculateQuizSubjectTargets(questionCount) {
     const baseTargets = QUIZ_SUBJECT_WEIGHTS.map((item, index) => {
         const rawCount = (questionCount * item.weight) / 100;
@@ -138,6 +179,230 @@ function shuffleQuestions(questions) {
         [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
     }
     return shuffled;
+}
+
+function isPuzzleQuestion(question) {
+    if (!question || question.set_number === undefined || question.set_number === null) return false;
+    if (normalizeSubject(question.subject) !== 'Analytical') return false;
+
+    return PUZZLE_TOPIC_REGEX.test(question.topic || '') || PUZZLE_TOPIC_REGEX.test(question.chapter || '');
+}
+
+function getPuzzleSetNumbers(questions = []) {
+    return [...new Set(
+        questions
+            .filter(isPuzzleQuestion)
+            .map((question) => question.set_number)
+            .filter((setNumber) => setNumber !== undefined && setNumber !== null)
+    )];
+}
+
+function shuffleQuestionGroups(questions) {
+    const groups = [];
+
+    for (const question of questions) {
+        const previousGroup = groups[groups.length - 1];
+        const previousQuestion = previousGroup?.[previousGroup.length - 1];
+
+        if (isPuzzleQuestion(question)
+            && isPuzzleQuestion(previousQuestion)
+            && previousQuestion.set_number === question.set_number) {
+            previousGroup.push(question);
+        } else {
+            groups.push([question]);
+        }
+    }
+
+    return shuffleQuestions(groups).flat();
+}
+
+function getQuestionSortPipeline() {
+    return [
+        {
+            $addFields: {
+                effectiveQuestionNo: { $ifNull: ['$question_no', '$questionNo'] }
+            }
+        },
+        {
+            $sort: {
+                effectiveQuestionNo: 1,
+                question_no: 1,
+                questionNo: 1,
+                _id: 1
+            }
+        },
+        {
+            $project: {
+                effectiveQuestionNo: 0
+            }
+        }
+    ];
+}
+
+async function getRandomPuzzleSetRows(questionFilter, excludedQuestionIds = [], excludedSetNumbers = []) {
+    const setNumberFilter = {
+        set_number: {
+            $exists: true,
+            $ne: null,
+            ...(excludedSetNumbers.length ? { $nin: excludedSetNumbers } : {})
+        }
+    };
+    const setFilter = withExcludedQuestionIds(
+        buildFilter(
+            questionFilter,
+            buildPuzzleTopicFilter(),
+            setNumberFilter
+        ),
+        excludedQuestionIds
+    );
+    const setRows = await QuestionBank.aggregate([
+        { $match: setFilter },
+        {
+            $group: {
+                _id: '$set_number',
+                count: { $sum: 1 }
+            }
+        }
+    ]);
+
+    return shuffleQuestions(setRows);
+}
+
+async function getOrderedPuzzleSetQuestions(questionFilter, setNumber, excludedQuestionIds = []) {
+    const setQuestionFilter = withExcludedQuestionIds(
+        buildFilter(
+            questionFilter,
+            buildPuzzleTopicFilter(),
+            { set_number: setNumber }
+        ),
+        excludedQuestionIds
+    );
+
+    return QuestionBank.aggregate([
+        { $match: setQuestionFilter },
+        ...getQuestionSortPipeline()
+    ]);
+}
+
+async function selectPuzzleSetQuestions(questionFilter, limit, excludedQuestionIds = [], excludedSetNumbers = []) {
+    if (limit < 1) return [];
+
+    const selectedQuestions = [];
+    const selectedQuestionIds = [...excludedQuestionIds];
+    const selectedSetNumbers = [...excludedSetNumbers];
+    const puzzleSetRows = await getRandomPuzzleSetRows(questionFilter, selectedQuestionIds, selectedSetNumbers);
+
+    for (const setRow of puzzleSetRows) {
+        if (selectedQuestions.length >= limit) break;
+
+        selectedSetNumbers.push(setRow._id);
+        const setQuestions = await getOrderedPuzzleSetQuestions(questionFilter, setRow._id, selectedQuestionIds);
+        for (const question of setQuestions) {
+            if (selectedQuestions.length >= limit) break;
+
+            selectedQuestions.push(question);
+            selectedQuestionIds.push(question._id);
+        }
+    }
+
+    return selectedQuestions;
+}
+
+async function selectRandomQuestions(questionFilter, limit, excludedQuestionIds = []) {
+    if (limit < 1) return [];
+
+    return QuestionBank.aggregate([
+        { $match: withExcludedQuestionIds(questionFilter, excludedQuestionIds) },
+        { $sample: { size: limit } }
+    ]);
+}
+
+async function selectAnalyticalQuizQuestions(questionFilter, limit, excludedQuestionIds = [], excludedSetNumbers = []) {
+    if (limit < 1) return [];
+
+    const selectedQuestions = [];
+    const selectedQuestionIds = [...excludedQuestionIds];
+    const selectedSetNumbers = [...excludedSetNumbers];
+    const nonPuzzleQuestions = await selectRandomQuestions(
+        buildFilter(questionFilter, buildNotPuzzleTopicFilter()),
+        limit,
+        selectedQuestionIds
+    );
+    const puzzleSetRows = await getRandomPuzzleSetRows(questionFilter, selectedQuestionIds, selectedSetNumbers);
+    const candidateUnits = shuffleQuestions([
+        ...nonPuzzleQuestions.map((question) => ({ type: 'question', question })),
+        ...puzzleSetRows.map((setRow) => ({ type: 'puzzleSet', setNumber: setRow._id }))
+    ]);
+
+    for (const unit of candidateUnits) {
+        if (selectedQuestions.length >= limit) break;
+
+        if (unit.type === 'question') {
+            selectedQuestions.push(unit.question);
+            selectedQuestionIds.push(unit.question._id);
+            continue;
+        }
+
+        selectedSetNumbers.push(unit.setNumber);
+        const setQuestions = await getOrderedPuzzleSetQuestions(questionFilter, unit.setNumber, selectedQuestionIds);
+        for (const question of setQuestions) {
+            if (selectedQuestions.length >= limit) break;
+
+            selectedQuestions.push(question);
+            selectedQuestionIds.push(question._id);
+        }
+    }
+
+    if (selectedQuestions.length < limit) {
+        const fallbackQuestions = await selectRandomQuestions(
+            buildFilter(questionFilter, buildNotPuzzleTopicFilter()),
+            limit - selectedQuestions.length,
+            selectedQuestionIds
+        );
+        selectedQuestions.push(...fallbackQuestions);
+        selectedQuestionIds.push(...fallbackQuestions.map((question) => question._id));
+    }
+
+    if (selectedQuestions.length < limit) {
+        const fallbackPuzzleQuestions = await selectPuzzleSetQuestions(
+            questionFilter,
+            limit - selectedQuestions.length,
+            selectedQuestionIds,
+            selectedSetNumbers
+        );
+        selectedQuestions.push(...fallbackPuzzleQuestions);
+    }
+
+    return selectedQuestions.slice(0, limit);
+}
+
+async function selectQuizFillerQuestions(difficultyRegex, limit, excludedQuestionIds = [], excludedSetNumbers = []) {
+    if (limit < 1) return [];
+
+    const nonAnalyticalFilter = {
+        ...buildPracticeQuestionSourceFilter(),
+        difficulty: difficultyRegex,
+        $or: [
+            { subject: buildSubjectRegex('English') },
+            { subject: buildSubjectRegex('Math') }
+        ]
+    };
+    const analyticalFilter = {
+        ...buildPracticeQuestionSourceFilter(),
+        difficulty: difficultyRegex,
+        subject: buildSubjectRegex('Analytical')
+    };
+    const nonAnalyticalQuestions = await selectRandomQuestions(nonAnalyticalFilter, limit, excludedQuestionIds);
+    const nextExcludedQuestionIds = [
+        ...excludedQuestionIds,
+        ...nonAnalyticalQuestions.map((question) => question._id)
+    ];
+    const analyticalQuestions = await selectAnalyticalQuizQuestions(analyticalFilter, limit, nextExcludedQuestionIds, excludedSetNumbers);
+
+    return shuffleQuestionGroups([
+        ...nonAnalyticalQuestions,
+        ...analyticalQuestions
+    ]).slice(0, limit);
 }
 
 function normalizeOptionText(value) {
@@ -191,6 +456,7 @@ function normalizeQuestionForClient(question) {
         ...plainQuestion,
         questionNo: plainQuestion.questionNo || plainQuestion.question_no,
         question_no: plainQuestion.question_no || plainQuestion.questionNo,
+        set_number: plainQuestion.set_number,
         question: plainQuestion.question || questionText,
         questionText,
         topic,
@@ -615,12 +881,9 @@ exports.startPracticeExam = async (req, res) => {
             });
         }
 
-        const questions = await QuestionBank.aggregate([
-            {
-                $match: questionFilter
-            },
-            { $sample: { size: questionCount } }
-        ]);
+        const questions = isAnalyticalPuzzleRequest(subject, topic)
+            ? await selectPuzzleSetQuestions(questionFilter, questionCount)
+            : await selectRandomQuestions(questionFilter, questionCount);
 
         if (questions.length === 0) {
             return res.status(404).json({ success: false, message: 'No questions were found for this topic.' });
@@ -692,41 +955,32 @@ exports.startQuizExam = async (req, res) => {
         const subjectTargets = calculateQuizSubjectTargets(questionCount);
         const selectedQuestions = [];
         const selectedQuestionIds = [];
+        const selectedPuzzleSetNumbers = [];
 
         for (const target of subjectTargets) {
             if (target.count < 1) continue;
 
-            const subjectQuestions = await QuestionBank.aggregate([
-                {
-                    $match: {
-                        ...buildPracticeQuestionSourceFilter(),
-                        difficulty: difficultyRegex,
-                        subject: buildSubjectRegex(target.subject)
-                    }
-                },
-                { $sample: { size: target.count } }
-            ]);
+            const subjectFilter = {
+                ...buildPracticeQuestionSourceFilter(),
+                difficulty: difficultyRegex,
+                subject: buildSubjectRegex(target.subject)
+            };
+            const subjectQuestions = target.subject === 'Analytical'
+                ? await selectAnalyticalQuizQuestions(subjectFilter, target.count, selectedQuestionIds, selectedPuzzleSetNumbers)
+                : await selectRandomQuestions(subjectFilter, target.count, selectedQuestionIds);
 
             selectedQuestions.push(...subjectQuestions);
             selectedQuestionIds.push(...subjectQuestions.map((question) => question._id));
+            selectedPuzzleSetNumbers.push(...getPuzzleSetNumbers(subjectQuestions));
         }
 
         const remainingQuestionCount = questionCount - selectedQuestions.length;
         if (remainingQuestionCount > 0) {
-            const fillerQuestions = await QuestionBank.aggregate([
-                {
-                    $match: {
-                        ...buildPracticeQuestionSourceFilter(),
-                        difficulty: difficultyRegex,
-                        _id: { $nin: selectedQuestionIds },
-                        ...buildRecognizedSubjectFilter()
-                    }
-                },
-                { $sample: { size: remainingQuestionCount } }
-            ]);
+            const fillerQuestions = await selectQuizFillerQuestions(difficultyRegex, remainingQuestionCount, selectedQuestionIds, selectedPuzzleSetNumbers);
 
             selectedQuestions.push(...fillerQuestions);
             selectedQuestionIds.push(...fillerQuestions.map((question) => question._id));
+            selectedPuzzleSetNumbers.push(...getPuzzleSetNumbers(fillerQuestions));
         }
 
         if (selectedQuestions.length < questionCount) {
@@ -736,7 +990,7 @@ exports.startQuizExam = async (req, res) => {
             });
         }
 
-        const shuffledQuestions = shuffleQuestions(selectedQuestions).slice(0, questionCount);
+        const shuffledQuestions = shuffleQuestionGroups(selectedQuestions).slice(0, questionCount);
         const exam = await Exam.create({
             title: `${difficulty} Quiz (${shuffledQuestions.length} Questions)`,
             questions: shuffledQuestions.map((question) => question._id),
