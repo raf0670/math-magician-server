@@ -5,7 +5,11 @@ const mongoose = require('mongoose');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
-const PUZZLE_TOPIC_REGEX = /^puzzle$/i;
+const GROUP_KEY_SEPARATOR = '::';
+const GROUPED_TOPIC_RULES = [
+    { key: 'analytical-puzzle', subject: 'Analytical', topicRegex: /^puzzle$/i },
+    { key: 'english-reading-comprehension', subject: 'English', topicRegex: /^reading comprehension$/i }
+];
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 const LIVE_EXAM_SOURCE = 'liveExam';
 const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
@@ -107,21 +111,24 @@ function buildPracticeQuestionSourceFilter() {
     };
 }
 
-function buildPuzzleTopicFilter() {
+function buildGroupedTopicFieldFilter(groupedTopicRule) {
     return {
         $or: [
-            { topic: PUZZLE_TOPIC_REGEX },
-            { chapter: PUZZLE_TOPIC_REGEX }
+            { topic: groupedTopicRule.topicRegex },
+            { chapter: groupedTopicRule.topicRegex }
         ]
     };
 }
 
-function buildNotPuzzleTopicFilter() {
+function buildNotGroupedTopicFieldFilter(subject) {
+    const groupedTopicRules = getGroupedTopicRulesForSubject(subject);
+    if (!groupedTopicRules.length) return null;
+
     return {
-        $nor: [
-            { topic: PUZZLE_TOPIC_REGEX },
-            { chapter: PUZZLE_TOPIC_REGEX }
-        ]
+        $nor: groupedTopicRules.flatMap((groupedTopicRule) => [
+            { topic: groupedTopicRule.topicRegex },
+            { chapter: groupedTopicRule.topicRegex }
+        ])
     };
 }
 
@@ -143,8 +150,16 @@ function buildFilter(...filters) {
     return { $and: activeFilters };
 }
 
-function isAnalyticalPuzzleRequest(subject, topic) {
-    return normalizeSubject(subject) === 'Analytical' && PUZZLE_TOPIC_REGEX.test(topic || '');
+function getGroupedTopicRulesForSubject(subject) {
+    const normalizedSubject = normalizeSubject(subject);
+    return GROUPED_TOPIC_RULES.filter((groupedTopicRule) => groupedTopicRule.subject === normalizedSubject);
+}
+
+function getGroupedTopicRuleForRequest(subject, topic) {
+    const normalizedSubject = normalizeSubject(subject);
+    return GROUPED_TOPIC_RULES.find((groupedTopicRule) => (
+        groupedTopicRule.subject === normalizedSubject && groupedTopicRule.topicRegex.test(topic || '')
+    )) || null;
 }
 
 function calculateQuizSubjectTargets(questionCount) {
@@ -181,19 +196,30 @@ function shuffleQuestions(questions) {
     return shuffled;
 }
 
-function isPuzzleQuestion(question) {
-    if (!question || question.set_number === undefined || question.set_number === null) return false;
-    if (normalizeSubject(question.subject) !== 'Analytical') return false;
+function getGroupedTopicRuleForQuestion(question) {
+    if (!question || question.set_number === undefined || question.set_number === null) return null;
+    const normalizedSubject = normalizeSubject(question.subject);
 
-    return PUZZLE_TOPIC_REGEX.test(question.topic || '') || PUZZLE_TOPIC_REGEX.test(question.chapter || '');
+    return GROUPED_TOPIC_RULES.find((groupedTopicRule) => (
+        groupedTopicRule.subject === normalizedSubject
+        && (groupedTopicRule.topicRegex.test(question.topic || '') || groupedTopicRule.topicRegex.test(question.chapter || ''))
+    )) || null;
 }
 
-function getPuzzleSetNumbers(questions = []) {
+function buildGroupKey(groupedTopicRule, setNumber) {
+    return `${groupedTopicRule.key}${GROUP_KEY_SEPARATOR}${setNumber}`;
+}
+
+function getQuestionGroupKey(question) {
+    const groupedTopicRule = getGroupedTopicRuleForQuestion(question);
+    return groupedTopicRule ? buildGroupKey(groupedTopicRule, question.set_number) : '';
+}
+
+function getQuestionGroupKeys(questions = []) {
     return [...new Set(
         questions
-            .filter(isPuzzleQuestion)
-            .map((question) => question.set_number)
-            .filter((setNumber) => setNumber !== undefined && setNumber !== null)
+            .map(getQuestionGroupKey)
+            .filter(Boolean)
     )];
 }
 
@@ -203,10 +229,9 @@ function shuffleQuestionGroups(questions) {
     for (const question of questions) {
         const previousGroup = groups[groups.length - 1];
         const previousQuestion = previousGroup?.[previousGroup.length - 1];
+        const questionGroupKey = getQuestionGroupKey(question);
 
-        if (isPuzzleQuestion(question)
-            && isPuzzleQuestion(previousQuestion)
-            && previousQuestion.set_number === question.set_number) {
+        if (questionGroupKey && questionGroupKey === getQuestionGroupKey(previousQuestion)) {
             previousGroup.push(question);
         } else {
             groups.push([question]);
@@ -239,19 +264,12 @@ function getQuestionSortPipeline() {
     ];
 }
 
-async function getRandomPuzzleSetRows(questionFilter, excludedQuestionIds = [], excludedSetNumbers = []) {
-    const setNumberFilter = {
-        set_number: {
-            $exists: true,
-            $ne: null,
-            ...(excludedSetNumbers.length ? { $nin: excludedSetNumbers } : {})
-        }
-    };
+async function getRandomGroupedSetRows(questionFilter, groupedTopicRule, excludedQuestionIds = [], excludedGroupKeys = []) {
     const setFilter = withExcludedQuestionIds(
         buildFilter(
             questionFilter,
-            buildPuzzleTopicFilter(),
-            setNumberFilter
+            buildGroupedTopicFieldFilter(groupedTopicRule),
+            { set_number: { $exists: true, $ne: null } }
         ),
         excludedQuestionIds
     );
@@ -265,14 +283,16 @@ async function getRandomPuzzleSetRows(questionFilter, excludedQuestionIds = [], 
         }
     ]);
 
-    return shuffleQuestions(setRows);
+    return shuffleQuestions(
+        setRows.filter((setRow) => !excludedGroupKeys.includes(buildGroupKey(groupedTopicRule, setRow._id)))
+    );
 }
 
-async function getOrderedPuzzleSetQuestions(questionFilter, setNumber, excludedQuestionIds = []) {
+async function getOrderedGroupedSetQuestions(questionFilter, groupedTopicRule, setNumber, excludedQuestionIds = []) {
     const setQuestionFilter = withExcludedQuestionIds(
         buildFilter(
             questionFilter,
-            buildPuzzleTopicFilter(),
+            buildGroupedTopicFieldFilter(groupedTopicRule),
             { set_number: setNumber }
         ),
         excludedQuestionIds
@@ -284,19 +304,19 @@ async function getOrderedPuzzleSetQuestions(questionFilter, setNumber, excludedQ
     ]);
 }
 
-async function selectPuzzleSetQuestions(questionFilter, limit, excludedQuestionIds = [], excludedSetNumbers = []) {
+async function selectGroupedSetQuestions(questionFilter, groupedTopicRule, limit, excludedQuestionIds = [], excludedGroupKeys = []) {
     if (limit < 1) return [];
 
     const selectedQuestions = [];
     const selectedQuestionIds = [...excludedQuestionIds];
-    const selectedSetNumbers = [...excludedSetNumbers];
-    const puzzleSetRows = await getRandomPuzzleSetRows(questionFilter, selectedQuestionIds, selectedSetNumbers);
+    const selectedGroupKeys = [...excludedGroupKeys];
+    const groupedSetRows = await getRandomGroupedSetRows(questionFilter, groupedTopicRule, selectedQuestionIds, selectedGroupKeys);
 
-    for (const setRow of puzzleSetRows) {
+    for (const setRow of groupedSetRows) {
         if (selectedQuestions.length >= limit) break;
 
-        selectedSetNumbers.push(setRow._id);
-        const setQuestions = await getOrderedPuzzleSetQuestions(questionFilter, setRow._id, selectedQuestionIds);
+        selectedGroupKeys.push(buildGroupKey(groupedTopicRule, setRow._id));
+        const setQuestions = await getOrderedGroupedSetQuestions(questionFilter, groupedTopicRule, setRow._id, selectedQuestionIds);
         for (const question of setQuestions) {
             if (selectedQuestions.length >= limit) break;
 
@@ -317,21 +337,38 @@ async function selectRandomQuestions(questionFilter, limit, excludedQuestionIds 
     ]);
 }
 
-async function selectAnalyticalQuizQuestions(questionFilter, limit, excludedQuestionIds = [], excludedSetNumbers = []) {
+async function selectSubjectQuizQuestions(subject, questionFilter, limit, excludedQuestionIds = [], excludedGroupKeys = []) {
     if (limit < 1) return [];
 
     const selectedQuestions = [];
     const selectedQuestionIds = [...excludedQuestionIds];
-    const selectedSetNumbers = [...excludedSetNumbers];
-    const nonPuzzleQuestions = await selectRandomQuestions(
-        buildFilter(questionFilter, buildNotPuzzleTopicFilter()),
+    const selectedGroupKeys = [...excludedGroupKeys];
+    const groupedTopicRules = getGroupedTopicRulesForSubject(subject);
+
+    if (!groupedTopicRules.length) {
+        return selectRandomQuestions(questionFilter, limit, selectedQuestionIds);
+    }
+
+    const nonGroupedQuestions = await selectRandomQuestions(
+        buildFilter(questionFilter, buildNotGroupedTopicFieldFilter(subject)),
         limit,
         selectedQuestionIds
     );
-    const puzzleSetRows = await getRandomPuzzleSetRows(questionFilter, selectedQuestionIds, selectedSetNumbers);
+    const groupedSetUnits = [];
+
+    for (const groupedTopicRule of groupedTopicRules) {
+        const groupedSetRows = await getRandomGroupedSetRows(questionFilter, groupedTopicRule, selectedQuestionIds, selectedGroupKeys);
+        groupedSetUnits.push(...groupedSetRows.map((setRow) => ({
+            type: 'groupedSet',
+            groupedTopicRule,
+            setNumber: setRow._id,
+            groupKey: buildGroupKey(groupedTopicRule, setRow._id)
+        })));
+    }
+
     const candidateUnits = shuffleQuestions([
-        ...nonPuzzleQuestions.map((question) => ({ type: 'question', question })),
-        ...puzzleSetRows.map((setRow) => ({ type: 'puzzleSet', setNumber: setRow._id }))
+        ...nonGroupedQuestions.map((question) => ({ type: 'question', question })),
+        ...groupedSetUnits
     ]);
 
     for (const unit of candidateUnits) {
@@ -343,8 +380,8 @@ async function selectAnalyticalQuizQuestions(questionFilter, limit, excludedQues
             continue;
         }
 
-        selectedSetNumbers.push(unit.setNumber);
-        const setQuestions = await getOrderedPuzzleSetQuestions(questionFilter, unit.setNumber, selectedQuestionIds);
+        selectedGroupKeys.push(unit.groupKey);
+        const setQuestions = await getOrderedGroupedSetQuestions(questionFilter, unit.groupedTopicRule, unit.setNumber, selectedQuestionIds);
         for (const question of setQuestions) {
             if (selectedQuestions.length >= limit) break;
 
@@ -355,7 +392,7 @@ async function selectAnalyticalQuizQuestions(questionFilter, limit, excludedQues
 
     if (selectedQuestions.length < limit) {
         const fallbackQuestions = await selectRandomQuestions(
-            buildFilter(questionFilter, buildNotPuzzleTopicFilter()),
+            buildFilter(questionFilter, buildNotGroupedTopicFieldFilter(subject)),
             limit - selectedQuestions.length,
             selectedQuestionIds
         );
@@ -363,46 +400,45 @@ async function selectAnalyticalQuizQuestions(questionFilter, limit, excludedQues
         selectedQuestionIds.push(...fallbackQuestions.map((question) => question._id));
     }
 
-    if (selectedQuestions.length < limit) {
-        const fallbackPuzzleQuestions = await selectPuzzleSetQuestions(
+    for (const groupedTopicRule of groupedTopicRules) {
+        if (selectedQuestions.length >= limit) break;
+
+        const fallbackGroupedQuestions = await selectGroupedSetQuestions(
             questionFilter,
+            groupedTopicRule,
             limit - selectedQuestions.length,
             selectedQuestionIds,
-            selectedSetNumbers
+            selectedGroupKeys
         );
-        selectedQuestions.push(...fallbackPuzzleQuestions);
+        selectedQuestions.push(...fallbackGroupedQuestions);
+        selectedQuestionIds.push(...fallbackGroupedQuestions.map((question) => question._id));
+        selectedGroupKeys.push(...getQuestionGroupKeys(fallbackGroupedQuestions));
     }
 
     return selectedQuestions.slice(0, limit);
 }
 
-async function selectQuizFillerQuestions(difficultyRegex, limit, excludedQuestionIds = [], excludedSetNumbers = []) {
+async function selectQuizFillerQuestions(difficultyRegex, limit, excludedQuestionIds = [], excludedGroupKeys = []) {
     if (limit < 1) return [];
 
-    const nonAnalyticalFilter = {
-        ...buildPracticeQuestionSourceFilter(),
-        difficulty: difficultyRegex,
-        $or: [
-            { subject: buildSubjectRegex('English') },
-            { subject: buildSubjectRegex('Math') }
-        ]
-    };
-    const analyticalFilter = {
-        ...buildPracticeQuestionSourceFilter(),
-        difficulty: difficultyRegex,
-        subject: buildSubjectRegex('Analytical')
-    };
-    const nonAnalyticalQuestions = await selectRandomQuestions(nonAnalyticalFilter, limit, excludedQuestionIds);
-    const nextExcludedQuestionIds = [
-        ...excludedQuestionIds,
-        ...nonAnalyticalQuestions.map((question) => question._id)
-    ];
-    const analyticalQuestions = await selectAnalyticalQuizQuestions(analyticalFilter, limit, nextExcludedQuestionIds, excludedSetNumbers);
+    const subjectSelections = [];
+    const selectedQuestionIds = [...excludedQuestionIds];
+    const selectedGroupKeys = [...excludedGroupKeys];
 
-    return shuffleQuestionGroups([
-        ...nonAnalyticalQuestions,
-        ...analyticalQuestions
-    ]).slice(0, limit);
+    for (const subject of SUBJECTS) {
+        const subjectFilter = {
+            ...buildPracticeQuestionSourceFilter(),
+            difficulty: difficultyRegex,
+            subject: buildSubjectRegex(subject)
+        };
+        const subjectQuestions = await selectSubjectQuizQuestions(subject, subjectFilter, limit, selectedQuestionIds, selectedGroupKeys);
+
+        subjectSelections.push(...subjectQuestions);
+        selectedQuestionIds.push(...subjectQuestions.map((question) => question._id));
+        selectedGroupKeys.push(...getQuestionGroupKeys(subjectQuestions));
+    }
+
+    return shuffleQuestionGroups(subjectSelections).slice(0, limit);
 }
 
 function normalizeOptionText(value) {
@@ -881,8 +917,9 @@ exports.startPracticeExam = async (req, res) => {
             });
         }
 
-        const questions = isAnalyticalPuzzleRequest(subject, topic)
-            ? await selectPuzzleSetQuestions(questionFilter, questionCount)
+        const groupedTopicRule = getGroupedTopicRuleForRequest(subject, topic);
+        const questions = groupedTopicRule
+            ? await selectGroupedSetQuestions(questionFilter, groupedTopicRule, questionCount)
             : await selectRandomQuestions(questionFilter, questionCount);
 
         if (questions.length === 0) {
@@ -955,7 +992,7 @@ exports.startQuizExam = async (req, res) => {
         const subjectTargets = calculateQuizSubjectTargets(questionCount);
         const selectedQuestions = [];
         const selectedQuestionIds = [];
-        const selectedPuzzleSetNumbers = [];
+        const selectedGroupKeys = [];
 
         for (const target of subjectTargets) {
             if (target.count < 1) continue;
@@ -965,22 +1002,22 @@ exports.startQuizExam = async (req, res) => {
                 difficulty: difficultyRegex,
                 subject: buildSubjectRegex(target.subject)
             };
-            const subjectQuestions = target.subject === 'Analytical'
-                ? await selectAnalyticalQuizQuestions(subjectFilter, target.count, selectedQuestionIds, selectedPuzzleSetNumbers)
+            const subjectQuestions = getGroupedTopicRulesForSubject(target.subject).length
+                ? await selectSubjectQuizQuestions(target.subject, subjectFilter, target.count, selectedQuestionIds, selectedGroupKeys)
                 : await selectRandomQuestions(subjectFilter, target.count, selectedQuestionIds);
 
             selectedQuestions.push(...subjectQuestions);
             selectedQuestionIds.push(...subjectQuestions.map((question) => question._id));
-            selectedPuzzleSetNumbers.push(...getPuzzleSetNumbers(subjectQuestions));
+            selectedGroupKeys.push(...getQuestionGroupKeys(subjectQuestions));
         }
 
         const remainingQuestionCount = questionCount - selectedQuestions.length;
         if (remainingQuestionCount > 0) {
-            const fillerQuestions = await selectQuizFillerQuestions(difficultyRegex, remainingQuestionCount, selectedQuestionIds, selectedPuzzleSetNumbers);
+            const fillerQuestions = await selectQuizFillerQuestions(difficultyRegex, remainingQuestionCount, selectedQuestionIds, selectedGroupKeys);
 
             selectedQuestions.push(...fillerQuestions);
             selectedQuestionIds.push(...fillerQuestions.map((question) => question._id));
-            selectedPuzzleSetNumbers.push(...getPuzzleSetNumbers(fillerQuestions));
+            selectedGroupKeys.push(...getQuestionGroupKeys(fillerQuestions));
         }
 
         if (selectedQuestions.length < questionCount) {
