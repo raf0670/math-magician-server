@@ -6,6 +6,7 @@ const {
     getMyBooking,
     submitBookedCheckout,
     getPaymentAccess,
+    getAdminPreBookings,
     getAdminEnrollmentReviews,
     updateEnrollmentReviewStatus,
     markEnrollmentFullyPaid
@@ -17,6 +18,7 @@ router.get('/my-booking', protect, getMyBooking);
 router.post('/manual-enrollment', protect, submitManualEnrollment);
 router.post('/book-seat', protect, submitSeatBooking);
 router.post('/booked-checkout', protect, submitBookedCheckout);
+router.get('/admin/pre-bookings', protect, authorizeAdmin, getAdminPreBookings);
 router.get('/admin/enrollments', protect, authorizeAdmin, getAdminEnrollmentReviews);
 router.patch('/admin/enrollments/:paymentId/status', protect, authorizeAdmin, updateEnrollmentReviewStatus);
 router.patch('/admin/enrollments/:paymentId/final-payment', protect, authorizeAdmin, markEnrollmentFullyPaid);

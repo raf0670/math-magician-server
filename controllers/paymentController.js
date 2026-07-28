@@ -130,6 +130,24 @@ function formatSeatBooking(booking) {
     };
 }
 
+function formatPreBookingForAdmin(booking) {
+    const plan = getPaymentPlan(booking.planId);
+
+    return {
+        bookingId: booking._id,
+        user: booking.user,
+        planId: booking.planId,
+        planTitle: booking.planTitle,
+        amount: plan?.amount || 0,
+        deliveryMode: plan?.deliveryMode || '',
+        currency: 'BDT',
+        status: 'pre-booking',
+        createdAt: booking.createdAt,
+        updatedAt: booking.updatedAt,
+        enrollment: getStudentDetailPayload(booking)
+    };
+}
+
 function formatEnrollmentForAdmin(payment, detail) {
     return {
         paymentId: payment._id,
@@ -542,6 +560,45 @@ exports.getAdminEnrollmentReviews = async (req, res) => {
                 payment,
                 detailByPaymentId.get(payment._id.toString())
             ))
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.getAdminPreBookings = async (req, res) => {
+    try {
+        const bookings = await SeatBooking.find({})
+            .populate('user', 'name email role hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const bookingPairs = bookings.map((booking) => ({
+            user: booking.user?._id || booking.user,
+            planId: booking.planId
+        }));
+        const userIds = bookingPairs.map((pair) => pair.user).filter(Boolean);
+        const planIds = [...new Set(bookingPairs.map((pair) => pair.planId).filter(Boolean))];
+
+        const existingReviews = userIds.length && planIds.length
+            ? await Payment.find({
+                user: { $in: userIds },
+                planId: { $in: planIds },
+                status: { $in: REVIEW_STATUSES }
+            }).select('user planId').lean()
+            : [];
+        const reviewedBookingKeys = new Set(
+            existingReviews.map((payment) => `${payment.user.toString()}:${payment.planId}`)
+        );
+        const preBookings = bookings.filter((booking) => {
+            const userId = booking.user?._id || booking.user;
+            return userId && !reviewedBookingKeys.has(`${userId.toString()}:${booking.planId}`);
+        });
+
+        res.status(200).json({
+            success: true,
+            count: preBookings.length,
+            data: preBookings.map(formatPreBookingForAdmin)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
