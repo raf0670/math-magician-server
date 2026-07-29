@@ -3,6 +3,7 @@ const User = require('../models/User');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
 const SeatBooking = require('../models/SeatBooking');
 const { getPaymentPlan } = require('../config/paymentPlans');
+const { sendPaymentConfirmedEmail } = require('../services/emailService');
 
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'];
 const APPROVED_ACCESS_STATUSES = ['approved', 'paid'];
@@ -650,6 +651,8 @@ exports.updateEnrollmentReviewStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Enrollment payment request was not found.' });
         }
 
+        const shouldSendPaymentConfirmedEmail = payment.status !== 'approved' && status === 'approved';
+
         applyMissingPaymentMeta(payment);
         payment.status = status;
         payment.reviewedBy = req.user._id;
@@ -678,6 +681,18 @@ exports.updateEnrollmentReviewStatus = async (req, res) => {
             .populate('reviewedBy', 'name email')
             .lean();
         const detail = await EnrollmentDetail.findOne({ payment: payment._id }).lean();
+
+        if (shouldSendPaymentConfirmedEmail && updatedPayment?.user?.email) {
+            try {
+                await sendPaymentConfirmedEmail({
+                    to: updatedPayment.user.email,
+                    name: updatedPayment.user.name,
+                    planTitle: updatedPayment.planTitle
+                });
+            } catch (emailError) {
+                console.error('Payment confirmation email failed:', emailError.message);
+            }
+        }
 
         res.status(200).json({
             success: true,
