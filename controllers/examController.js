@@ -162,6 +162,75 @@ function getGroupedTopicRuleForRequest(subject, topic) {
     )) || null;
 }
 
+function normalizePracticeTopics(body = {}) {
+    const rawTopics = Array.isArray(body.topics) ? body.topics : [body.topic];
+    const topicMap = new Map();
+
+    for (const rawTopic of rawTopics) {
+        const topic = clean(rawTopic);
+        if (!topic) continue;
+
+        const topicKey = topic.toLowerCase();
+        if (!topicMap.has(topicKey)) {
+            topicMap.set(topicKey, topic);
+        }
+    }
+
+    return [...topicMap.values()];
+}
+
+function buildTopicQuestionFilter(subjectRegex, topic) {
+    const topicRegex = new RegExp(`^${escapedRegex(topic)}$`, 'i');
+
+    return {
+        ...buildPracticeQuestionSourceFilter(),
+        subject: subjectRegex,
+        $or: [
+            { topic: topicRegex },
+            { chapter: topicRegex }
+        ]
+    };
+}
+
+function calculatePracticeTopicTargets(topicRows, questionCount) {
+    if (!topicRows.length || questionCount < 1) return [];
+
+    const targets = topicRows.map((topicRow) => ({
+        ...topicRow,
+        targetCount: Math.floor(questionCount / topicRows.length)
+    }));
+    const remainder = questionCount - targets.reduce((sum, topicRow) => sum + topicRow.targetCount, 0);
+    const remainderTargets = shuffleQuestions(targets).slice(0, remainder);
+
+    for (const topicRow of remainderTargets) {
+        topicRow.targetCount += 1;
+    }
+
+    let deficit = 0;
+    for (const topicRow of targets) {
+        if (topicRow.targetCount > topicRow.availableQuestionCount) {
+            deficit += topicRow.targetCount - topicRow.availableQuestionCount;
+            topicRow.targetCount = topicRow.availableQuestionCount;
+        }
+    }
+
+    while (deficit > 0) {
+        const topicsWithCapacity = shuffleQuestions(
+            targets.filter((topicRow) => topicRow.targetCount < topicRow.availableQuestionCount)
+        );
+        if (!topicsWithCapacity.length) break;
+
+        for (const topicRow of topicsWithCapacity) {
+            if (deficit <= 0) break;
+
+            topicRow.targetCount += 1;
+            deficit -= 1;
+        }
+    }
+
+    return targets;
+}
+
 function calculateQuizSubjectTargets(questionCount) {
     const baseTargets = QUIZ_SUBJECT_WEIGHTS.map((item, index) => {
         const rawCount = (questionCount * item.weight) / 100;
@@ -873,21 +942,21 @@ exports.getPracticeMeta = async (req, res) => {
     }
 };
 
-// @desc    Create a custom untimed practice exam from subject/topic/count
+// @desc    Create a custom untimed practice exam from subject/topics/count
 // @route   POST /api/exams/practice/start
 // @access  Private
 exports.startPracticeExam = async (req, res) => {
     try {
         const subject = normalizeSubject(req.body.subject);
-        const topic = req.body.topic?.toString().trim();
+        const topics = normalizePracticeTopics(req.body);
         const questionCount = Number(req.body.questionCount);
 
         if (!SUBJECTS.includes(subject)) {
             return res.status(400).json({ success: false, message: 'Please choose Math, English, or Analytical.' });
         }
 
-        if (!topic) {
-            return res.status(400).json({ success: false, message: 'Please choose a topic before starting the exam.' });
+        if (!topics.length) {
+            return res.status(400).json({ success: false, message: 'Please choose at least one topic before starting the exam.' });
         }
 
         if (!Number.isInteger(questionCount) || questionCount < 1) {
@@ -895,39 +964,85 @@ exports.startPracticeExam = async (req, res) => {
         }
 
         const subjectRegex = buildSubjectRegex(subject);
-        const topicRegex = new RegExp(`^${escapedRegex(topic)}$`, 'i');
-        const questionFilter = {
-            ...buildPracticeQuestionSourceFilter(),
-            subject: subjectRegex,
-            $or: [
-                { topic: topicRegex },
-                { chapter: topicRegex }
-            ]
-        };
-        const availableQuestionCount = await QuestionBank.countDocuments(questionFilter);
+        const topicRows = await Promise.all(topics.map(async (topic) => {
+            const questionFilter = buildTopicQuestionFilter(subjectRegex, topic);
+            const availableQuestionCount = await QuestionBank.countDocuments(questionFilter);
 
-        if (availableQuestionCount === 0) {
-            return res.status(404).json({ success: false, message: 'No questions were found for this topic.' });
+            return {
+                topic,
+                questionFilter,
+                availableQuestionCount
+            };
+        }));
+        const availableTopicRows = topicRows.filter((topicRow) => topicRow.availableQuestionCount > 0);
+        const totalAvailableQuestionCount = availableTopicRows.reduce((sum, topicRow) => sum + topicRow.availableQuestionCount, 0);
+
+        if (totalAvailableQuestionCount === 0) {
+            return res.status(404).json({ success: false, message: 'No questions were found for the selected topics.' });
         }
 
-        if (questionCount > availableQuestionCount) {
+        if (questionCount > totalAvailableQuestionCount) {
             return res.status(400).json({
                 success: false,
-                message: `Only ${availableQuestionCount} question${availableQuestionCount === 1 ? '' : 's'} are available for this topic.`
+                message: `Only ${totalAvailableQuestionCount} question${totalAvailableQuestionCount === 1 ? '' : 's'} are available for the selected topics.`
             });
         }
 
-        const groupedTopicRule = getGroupedTopicRuleForRequest(subject, topic);
-        const questions = groupedTopicRule
-            ? await selectGroupedSetQuestions(questionFilter, groupedTopicRule, questionCount)
-            : await selectRandomQuestions(questionFilter, questionCount);
+        const topicTargets = calculatePracticeTopicTargets(availableTopicRows, questionCount);
+        const selectedQuestions = [];
+        const selectedQuestionIds = [];
+        const selectedGroupKeys = [];
 
-        if (questions.length === 0) {
-            return res.status(404).json({ success: false, message: 'No questions were found for this topic.' });
+        for (const topicTarget of topicTargets) {
+            if (topicTarget.targetCount < 1) continue;
+
+            const groupedTopicRule = getGroupedTopicRuleForRequest(subject, topicTarget.topic);
+            const topicQuestions = groupedTopicRule
+                ? await selectGroupedSetQuestions(topicTarget.questionFilter, groupedTopicRule, topicTarget.targetCount, selectedQuestionIds, selectedGroupKeys)
+                : await selectRandomQuestions(topicTarget.questionFilter, topicTarget.targetCount, selectedQuestionIds);
+
+            selectedQuestions.push(...topicQuestions);
+            selectedQuestionIds.push(...topicQuestions.map((question) => question._id));
+            selectedGroupKeys.push(...getQuestionGroupKeys(topicQuestions));
         }
 
+        if (selectedQuestions.length < questionCount) {
+            const remainingQuestionCount = questionCount - selectedQuestions.length;
+            const fillerTargets = calculatePracticeTopicTargets(
+                topicTargets
+                    .filter((topicTarget) => topicTarget.availableQuestionCount > topicTarget.targetCount)
+                    .map((topicTarget) => ({
+                        ...topicTarget,
+                        availableQuestionCount: topicTarget.availableQuestionCount - topicTarget.targetCount
+                    })),
+                remainingQuestionCount
+            );
+
+            for (const fillerTarget of fillerTargets) {
+                if (selectedQuestions.length >= questionCount || fillerTarget.targetCount < 1) continue;
+
+                const groupedTopicRule = getGroupedTopicRuleForRequest(subject, fillerTarget.topic);
+                const fillerQuestions = groupedTopicRule
+                    ? await selectGroupedSetQuestions(fillerTarget.questionFilter, groupedTopicRule, fillerTarget.targetCount, selectedQuestionIds, selectedGroupKeys)
+                    : await selectRandomQuestions(fillerTarget.questionFilter, fillerTarget.targetCount, selectedQuestionIds);
+
+                selectedQuestions.push(...fillerQuestions);
+                selectedQuestionIds.push(...fillerQuestions.map((question) => question._id));
+                selectedGroupKeys.push(...getQuestionGroupKeys(fillerQuestions));
+            }
+        }
+
+        if (selectedQuestions.length < questionCount) {
+            return res.status(400).json({
+                success: false,
+                message: 'Not enough questions are available to build this practice exam right now.'
+            });
+        }
+
+        const questions = shuffleQuestionGroups(selectedQuestions).slice(0, questionCount);
+        const topicTitle = topics.length === 1 ? topics[0] : `${topics.length} Topics`;
         const exam = await Exam.create({
-            title: `${subject} - ${topic} Practice (${questions.length} Questions)`,
+            title: `${subject} - ${topicTitle} Practice (${questions.length} Questions)`,
             questions: questions.map((question) => question._id),
             duration: 0,
             totalMarks: questions.length,
