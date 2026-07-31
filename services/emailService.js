@@ -1,8 +1,38 @@
 const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
+
+const EMAIL_PROVIDERS = {
+    RESEND: 'resend',
+    SMTP: 'smtp'
+};
 
 function getBooleanEnv(value) {
     if (typeof value === 'undefined') return undefined;
     return ['1', 'true', 'yes'].includes(value.toString().trim().toLowerCase());
+}
+
+function getEmailProvider() {
+    const configuredProvider = process.env.EMAIL_PROVIDER?.toString().trim().toLowerCase();
+
+    if (configuredProvider) {
+        return configuredProvider;
+    }
+
+    if (process.env.RESEND_API_KEY || process.env.NODE_ENV === 'production') {
+        return EMAIL_PROVIDERS.RESEND;
+    }
+
+    return EMAIL_PROVIDERS.SMTP;
+}
+
+function getFromAddress(provider) {
+    const from = process.env.EMAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
+
+    if (!from) {
+        throw new Error(`${provider.toUpperCase()} email sender is not configured.`);
+    }
+
+    return from;
 }
 
 function createTransporter() {
@@ -19,11 +49,24 @@ function createTransporter() {
         host,
         port,
         secure: getBooleanEnv(process.env.SMTP_SECURE) ?? port === 465,
+        connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS) || 8000,
+        greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS) || 8000,
+        socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS) || 10000,
         auth: {
             user,
             pass
         }
     });
+}
+
+function createResendClient() {
+    const apiKey = process.env.RESEND_API_KEY;
+
+    if (!apiKey) {
+        throw new Error('Resend API key is not configured.');
+    }
+
+    return new Resend(apiKey);
 }
 
 function escapeHtml(value) {
@@ -36,15 +79,46 @@ function escapeHtml(value) {
         .replace(/'/g, '&#039;');
 }
 
+function getEmailErrorMessage(error) {
+    if (!error) return 'Unknown email error';
+    if (typeof error === 'string') return error;
+    return error.message || error.name || 'Unknown email error';
+}
+
+async function sendEmail({ to, subject, text, html }) {
+    const provider = getEmailProvider();
+    const from = getFromAddress(provider);
+
+    try {
+        if (provider === EMAIL_PROVIDERS.RESEND) {
+            const resend = createResendClient();
+            const result = await resend.emails.send({ from, to, subject, text, html });
+
+            if (result.error) {
+                throw new Error(getEmailErrorMessage(result.error));
+            }
+
+            return result.data;
+        }
+
+        if (provider === EMAIL_PROVIDERS.SMTP) {
+            const transporter = createTransporter();
+            return transporter.sendMail({ from, to, subject, text, html });
+        }
+
+        throw new Error(`Unsupported email provider: ${provider}`);
+    } catch (error) {
+        console.error(`Email send failed via ${provider}: ${getEmailErrorMessage(error)}`);
+        throw error;
+    }
+}
+
 async function sendPasswordResetEmail({ to, name, resetUrl, expiresInMinutes }) {
-    const transporter = createTransporter();
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
     const displayName = name || 'there';
     const safeDisplayName = escapeHtml(displayName);
     const safeResetUrl = escapeHtml(resetUrl);
 
-    await transporter.sendMail({
-        from,
+    await sendEmail({
         to,
         subject: 'Reset your Exam Archive password',
         text: [
@@ -73,14 +147,11 @@ async function sendPasswordResetEmail({ to, name, resetUrl, expiresInMinutes }) 
 }
 
 async function sendPaymentConfirmedEmail({ to, name, planTitle }) {
-    const transporter = createTransporter();
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
     const displayName = name || 'there';
     const safeDisplayName = escapeHtml(displayName);
     const safePlanTitle = escapeHtml(planTitle || 'your enrollment');
 
-    await transporter.sendMail({
-        from,
+    await sendEmail({
         to,
         subject: 'Payment confirmed - Exam Archive access unlocked',
         text: [
