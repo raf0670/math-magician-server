@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { HOUSES } = require('../config/competition');
 
 const UserSchema = new mongoose.Schema({
     name: {
@@ -35,6 +36,12 @@ const UserSchema = new mongoose.Schema({
         type: String,
         enum: ['student', 'admin'],
         default: 'student'
+    },
+    house: {
+        type: String,
+        enum: [...HOUSES, ''],
+        default: '',
+        index: true
     },
     bio: {
         type: String,

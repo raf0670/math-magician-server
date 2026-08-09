@@ -13,6 +13,7 @@ function formatAuthUser(user) {
         name: user.name,
         email: user.email,
         role: user.role,
+        house: user.house || '',
         bio: user.bio || '',
         hasClassAccess: Boolean(user.hasClassAccess),
         hasBooked: Boolean(user.hasBooked),
@@ -198,7 +199,7 @@ exports.resetPassword = async (req, res) => {
 exports.getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
-            .select('name email role bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus')
+            .select('name email role house bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus')
             .lean();
 
         if (!user) {

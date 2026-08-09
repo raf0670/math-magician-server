@@ -3,6 +3,7 @@ const User = require('../models/User');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
 const SeatBooking = require('../models/SeatBooking');
 const { getPaymentPlan } = require('../config/paymentPlans');
+const { resolveHouse } = require('../config/competition');
 const { sendPaymentConfirmedEmail } = require('../services/emailService');
 
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'];
@@ -192,6 +193,24 @@ function formatEnrollmentForAdmin(payment, detail) {
     };
 }
 
+function formatPaymentUser(user) {
+    if (!user) return null;
+
+    return {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        house: user.house || '',
+        bio: user.bio || '',
+        hasClassAccess: Boolean(user.hasClassAccess),
+        hasBooked: Boolean(user.hasBooked),
+        bookedPlanId: user.bookedPlanId || '',
+        bookedAt: user.bookedAt || null,
+        paymentStatus: user.paymentStatus || 'unpaid'
+    };
+}
+
 function getPlanPaymentMeta(plan, paymentChoice) {
     const paidAmount = paymentChoice === 'partial' ? PARTIAL_PAYMENT_AMOUNT : plan.amount;
     return {
@@ -221,7 +240,14 @@ async function syncUserPaymentAccess(userId) {
     const approvedPayments = await Payment.find({
         user: userId,
         status: { $in: APPROVED_ACCESS_STATUSES }
-    }).select('paymentChoice remainingAmount fullyPaidAt').lean();
+    }).select('planId paymentChoice remainingAmount fullyPaidAt').lean();
+    const booking = await SeatBooking.findOne({ user: userId }).select('planId preferredBatch').lean();
+    const detail = approvedPayments.length
+        ? await EnrollmentDetail.findOne({ user: userId, payment: { $in: approvedPayments.map((payment) => payment._id) } })
+            .select('planId preferredBatch')
+            .sort({ createdAt: -1 })
+            .lean()
+        : null;
 
     const hasApprovedPayment = approvedPayments.length > 0;
     const hasFullyPaid = approvedPayments.some((payment) => {
@@ -236,14 +262,21 @@ async function syncUserPaymentAccess(userId) {
             ? 'partiallyPaid'
             : 'unpaid';
 
+    const house = resolveHouse({
+        planId: detail?.planId || booking?.planId || approvedPayments[0]?.planId,
+        preferredBatch: detail?.preferredBatch || booking?.preferredBatch
+    });
+
     await User.findByIdAndUpdate(userId, {
         hasClassAccess: hasApprovedPayment,
-        paymentStatus
+        paymentStatus,
+        ...(house ? { house } : {})
     });
 
     return {
         hasClassAccess: hasApprovedPayment,
-        paymentStatus
+        paymentStatus,
+        house
     };
 }
 
@@ -323,6 +356,9 @@ exports.submitManualEnrollment = async (req, res) => {
             paymentMethod,
             ...getStudentDetailPayload(formData)
         });
+        await User.findByIdAndUpdate(req.user._id, {
+            house: resolveHouse({ planId: payment.planId, preferredBatch: formData.preferredBatch })
+        });
 
         res.status(201).json({
             success: true,
@@ -399,28 +435,18 @@ exports.submitSeatBooking = async (req, res) => {
                 bookedPlanId: plan.id,
                 bookedAt: new Date(),
                 hasClassAccess: false,
-                paymentStatus: 'unpaid'
+                paymentStatus: 'unpaid',
+                house: resolveHouse({ planId: plan.id, preferredBatch: formData.preferredBatch })
             },
             { new: true, runValidators: true }
-        ).select('name email role bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus').lean();
+        ).select('name email role house bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus').lean();
 
         res.status(201).json({
             success: true,
             message: 'Seat booked successfully.',
             data: {
                 booking: formatSeatBooking(booking),
-                user: user ? {
-                    id: user._id,
-                    name: user.name,
-                    email: user.email,
-                    role: user.role,
-                    bio: user.bio || '',
-                    hasClassAccess: Boolean(user.hasClassAccess),
-                    hasBooked: Boolean(user.hasBooked),
-                    bookedPlanId: user.bookedPlanId || '',
-                    bookedAt: user.bookedAt || null,
-                    paymentStatus: user.paymentStatus || 'unpaid'
-                } : null
+                user: formatPaymentUser(user)
             }
         });
     } catch (error) {
@@ -509,6 +535,9 @@ exports.submitBookedCheckout = async (req, res) => {
             paymentMethod,
             ...getStudentDetailPayload(booking)
         });
+        await User.findByIdAndUpdate(req.user._id, {
+            house: resolveHouse({ planId: payment.planId, preferredBatch: booking.preferredBatch })
+        });
 
         res.status(201).json({
             success: true,
@@ -543,6 +572,7 @@ exports.getPaymentAccess = async (req, res) => {
                 data: {
                     hasClassAccess: true,
                     paymentStatus: 'fullyPaid',
+                    house: req.user.house || '',
                     hasBooked: Boolean(req.user.hasBooked),
                     bookedPlanId: req.user.bookedPlanId || '',
                     bookedAt: req.user.bookedAt || null
@@ -558,6 +588,7 @@ exports.getPaymentAccess = async (req, res) => {
             data: {
                 hasClassAccess: Boolean(req.user.hasClassAccess || access.hasClassAccess),
                 paymentStatus: access.paymentStatus,
+                house: access.house || req.user.house || '',
                 hasBooked: Boolean(booking || req.user.hasBooked),
                 bookedPlanId: booking?.planId || req.user.bookedPlanId || '',
                 bookedAt: booking?.createdAt || req.user.bookedAt || null

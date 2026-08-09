@@ -21,6 +21,33 @@ const SubmissionSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    isDisqualified: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    originalScore: {
+        type: Number
+    },
+    disqualificationReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    disqualifiedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    disqualifiedAt: {
+        type: Date
+    },
+    reinstatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    reinstatedAt: {
+        type: Date
+    },
     submittedAt: {
         type: Date,
         default: Date.now

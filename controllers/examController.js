@@ -2,6 +2,7 @@ const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
 const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
+const { normalizeCompetitionCategory } = require('../config/competition');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
@@ -588,6 +589,7 @@ function normalizeExamForClient(exam) {
     const plainExam = exam.toObject ? exam.toObject() : exam;
     return {
         ...plainExam,
+        competitionCategory: normalizeCompetitionCategory(plainExam.competitionCategory),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         questions: (plainExam.questions || [])
             .map(normalizeQuestionForClient)
@@ -619,6 +621,7 @@ async function normalizePopulatedExam(exam, options = {}) {
 
     return {
         ...plainExam,
+        competitionCategory: normalizeCompetitionCategory(plainExam.competitionCategory),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         questions: includeAnswers ? normalizedQuestions : normalizedQuestions.map(redactQuestionAnswers)
     };
@@ -753,6 +756,7 @@ function normalizeLabeledOption(option, index) {
 
 function parseLiveExamPayload(body = {}, userId) {
     const title = clean(body.title);
+    const competitionCategory = normalizeCompetitionCategory(body.competitionCategory);
     const startTime = new Date(body.startTime);
     const endTime = new Date(body.endTime);
     const questions = Array.isArray(body.questions) ? body.questions : [];
@@ -820,6 +824,7 @@ function parseLiveExamPayload(body = {}, userId) {
     return {
         payload: {
             title,
+            competitionCategory,
             startTime,
             endTime,
             duration: Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())
@@ -842,6 +847,7 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
 
     return {
         ...plainExam,
+        competitionCategory: normalizeCompetitionCategory(plainExam.competitionCategory),
         status: getLiveExamStatus(plainExam),
         questionCount,
         missingQuestionCount: Math.max(0, questionIds.length - questionCount),
@@ -1177,7 +1183,7 @@ exports.getLiveExams = async (req, res) => {
     try {
         const exams = await Exam.find({ isLiveExam: true })
             .sort({ startTime: -1 })
-            .select('title duration totalMarks negativeMarksPerQuestion examType allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
+            .select('title duration totalMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
             .lean();
 
         const examIds = exams.map((exam) => exam._id);
@@ -1249,6 +1255,7 @@ exports.createLiveExam = async (req, res) => {
             totalMarks: questions.length,
             negativeMarksPerQuestion: 0.25,
             examType: 'official',
+            competitionCategory: payload.competitionCategory,
             allowRetakes: false,
             isLiveExam: true,
             startTime: payload.startTime,
@@ -1302,6 +1309,7 @@ exports.updateLiveExam = async (req, res) => {
                 totalMarks: questions.length,
                 negativeMarksPerQuestion: 0.25,
                 examType: 'official',
+                competitionCategory: payload.competitionCategory,
                 allowRetakes: false,
                 isLiveExam: true,
                 startTime: payload.startTime,

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { COMPETITION_CATEGORIES } = require('../config/competition');
 
 const ExamSchema = new mongoose.Schema({
     title: {
@@ -29,6 +30,12 @@ const ExamSchema = new mongoose.Schema({
         type: String,
         enum: ['official', 'generatedPractice', 'generatedQuiz'],
         default: 'official',
+        index: true
+    },
+    competitionCategory: {
+        type: String,
+        enum: COMPETITION_CATEGORIES,
+        default: 'daily',
         index: true
     },
     allowRetakes: {
