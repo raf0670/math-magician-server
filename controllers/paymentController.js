@@ -30,6 +30,7 @@ const REQUIRED_FORM_FIELDS = [
     'bkashTrxID'
 ];
 const FACEBOOK_LINK_ERROR = 'Please enter a valid Facebook profile link.';
+const REFERENCE_EMAIL_ERROR = 'Please enter a valid reference email address.';
 
 function clean(value) {
     return value?.toString().trim() || '';
@@ -47,6 +48,10 @@ function isFacebookProfileLink(value) {
     } catch {
         return false;
     }
+}
+
+function isBasicEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(value));
 }
 
 function getBackupChoices(formData) {
@@ -111,6 +116,31 @@ async function findExistingTransaction(trxID, excludedPaymentId = null) {
     }
 
     return Payment.findOne(filter);
+}
+
+function getReferencePayload(source = {}) {
+    return {
+        referenceName: clean(source.referenceName || source.referrerName || source.refName),
+        referenceEmail: clean(source.referenceEmail || source.referrerEmail || source.refEmail).toLowerCase()
+    };
+}
+
+function getEnrollmentDetailPayload(source) {
+    if (!source) return null;
+
+    return {
+        ...getStudentDetailPayload(source),
+        ...getReferencePayload(source),
+        _id: source._id,
+        user: source.user,
+        payment: source.payment,
+        planId: source.planId,
+        planTitle: source.planTitle,
+        bkashTrxID: source.bkashTrxID,
+        paymentMethod: source.paymentMethod,
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt
+    };
 }
 
 function getStudentDetailPayload(source) {
@@ -189,7 +219,7 @@ function formatEnrollmentForAdmin(payment, detail) {
         fullyPaidAt: payment.fullyPaidAt,
         createdAt: payment.createdAt,
         updatedAt: payment.updatedAt,
-        enrollment: detail || null
+        enrollment: getEnrollmentDetailPayload(detail)
     };
 }
 
@@ -320,6 +350,15 @@ exports.submitManualEnrollment = async (req, res) => {
             });
         }
 
+        const referencePayload = getReferencePayload(formData);
+        if (referencePayload.referenceEmail && !isBasicEmail(referencePayload.referenceEmail)) {
+            return res.status(400).json({
+                success: false,
+                message: REFERENCE_EMAIL_ERROR,
+                invalidFields: ['referenceEmail']
+            });
+        }
+
         const bkashTrxID = getFormValue(formData, 'bkashTrxID');
         const existingPayment = await findExistingTransaction(bkashTrxID);
 
@@ -354,6 +393,7 @@ exports.submitManualEnrollment = async (req, res) => {
             planTitle: payment.planTitle,
             bkashTrxID,
             paymentMethod,
+            ...referencePayload,
             ...getStudentDetailPayload(formData)
         });
         await User.findByIdAndUpdate(req.user._id, {
@@ -372,6 +412,7 @@ exports.submitManualEnrollment = async (req, res) => {
                 deliveryMode: payment.deliveryMode,
                 paymentMethod: payment.paymentMethod,
                 bkashTrxID: payment.trxID,
+                ...referencePayload,
                 enrollmentId: detail._id
             }
         });
@@ -478,6 +519,7 @@ exports.submitBookedCheckout = async (req, res) => {
         const paymentChoice = clean(req.body.paymentChoice || 'full');
         const paymentMethod = getPaymentMethod(req.body.paymentMethod);
         const trxID = clean(req.body.trxID || req.body.bkashTrxID || req.body.transactionId);
+        const referencePayload = getReferencePayload(req.body);
         const booking = await SeatBooking.findOne({ user: req.user._id }).lean();
 
         if (!booking) {
@@ -494,6 +536,14 @@ exports.submitBookedCheckout = async (req, res) => {
 
         if (!trxID) {
             return res.status(400).json({ success: false, message: 'Transaction ID or reference is required.' });
+        }
+
+        if (referencePayload.referenceEmail && !isBasicEmail(referencePayload.referenceEmail)) {
+            return res.status(400).json({
+                success: false,
+                message: REFERENCE_EMAIL_ERROR,
+                invalidFields: ['referenceEmail']
+            });
         }
 
         const plan = getPaymentPlan(booking.planId);
@@ -533,6 +583,7 @@ exports.submitBookedCheckout = async (req, res) => {
             planTitle: payment.planTitle,
             bkashTrxID: trxID,
             paymentMethod,
+            ...referencePayload,
             ...getStudentDetailPayload(booking)
         });
         await User.findByIdAndUpdate(req.user._id, {
@@ -551,6 +602,7 @@ exports.submitBookedCheckout = async (req, res) => {
                 deliveryMode: payment.deliveryMode,
                 paymentMethod: payment.paymentMethod,
                 bkashTrxID: payment.trxID,
+                ...referencePayload,
                 enrollmentId: detail._id
             }
         });

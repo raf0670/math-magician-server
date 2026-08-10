@@ -36,6 +36,17 @@ const EnrollmentDetailSchema = new mongoose.Schema({
         enum: ['bkash', 'bank'],
         default: 'bkash'
     },
+    referenceName: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    referenceEmail: {
+        type: String,
+        trim: true,
+        lowercase: true,
+        default: ''
+    },
     email: {
         type: String,
         required: true,
