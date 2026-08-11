@@ -21,6 +21,7 @@ const QUIZ_SUBJECT_WEIGHTS = [
     { subject: 'Math', weight: 35 },
     { subject: 'Analytical', weight: 20 }
 ];
+const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
 
 function buildOfficialExamFilter() {
     return {
@@ -72,6 +73,11 @@ function calculateDurationMinutes(startTime, endTime) {
 function getEffectiveNegativeMarksPerQuestion(value) {
     const penalty = Number(value);
     return Number.isFinite(penalty) && penalty > 0 ? penalty : 0.25;
+}
+
+function normalizeSubmissionReason(value) {
+    const reason = clean(value);
+    return SUBMISSION_REASONS.has(reason) ? reason : 'manual';
 }
 
 function normalizeSubject(subject = '') {
@@ -742,6 +748,7 @@ function buildSubmissionResponse(submission, normalizedExam, options = {}) {
         negativeMarksPerQuestion: graded.negativeMarksPerQuestion,
         review: graded.review,
         answers: submission.answers || [],
+        submissionReason: normalizeSubmissionReason(submission.submissionReason),
         submissionId: submission._id,
         alreadySubmitted: Boolean(options.alreadySubmitted)
     };
@@ -1417,6 +1424,7 @@ exports.submitExam = async (req, res) => {
         }
 
         const { answers } = req.body; // e.g. [0, 2, 1, 3]
+        const submissionReason = normalizeSubmissionReason(req.body.submissionReason);
         if (!Array.isArray(answers)) {
             return res.status(400).json({ success: false, message: 'Please submit answers as an array of selected option indexes.' });
         }
@@ -1488,7 +1496,8 @@ exports.submitExam = async (req, res) => {
                 student: studentId,
                 exam: normalizedExam._id,
                 answers,
-                score: graded.score
+                score: graded.score,
+                submissionReason
             });
 
             return res.status(201).json(buildSubmissionResponse(submission, normalizedExam));

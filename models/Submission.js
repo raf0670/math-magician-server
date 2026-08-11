@@ -21,6 +21,12 @@ const SubmissionSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    submissionReason: {
+        type: String,
+        enum: ['manual', 'timer_expired', 'tab_switch'],
+        default: 'manual',
+        index: true
+    },
     isDisqualified: {
         type: Boolean,
         default: false,
