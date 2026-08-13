@@ -3,11 +3,12 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { sendPasswordResetEmail } = require('../services/emailService');
+const { getDefaultRankInfo, getRankInfoByStudentId } = require('../services/rankService');
 
 const PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 15;
 const PASSWORD_RESET_SUCCESS_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
 
-function formatAuthUser(user) {
+function formatAuthUser(user, rankInfo = getDefaultRankInfo()) {
     return {
         id: user._id,
         name: user.name,
@@ -19,7 +20,8 @@ function formatAuthUser(user) {
         hasBooked: Boolean(user.hasBooked),
         bookedPlanId: user.bookedPlanId || '',
         bookedAt: user.bookedAt || null,
-        paymentStatus: user.paymentStatus || 'unpaid'
+        paymentStatus: user.paymentStatus || 'unpaid',
+        rankInfo
     };
 }
 
@@ -206,9 +208,11 @@ exports.getMe = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User account was not found' });
         }
 
+        const rankInfo = await getRankInfoByStudentId(user._id);
+
         res.status(200).json({
             success: true,
-            data: formatAuthUser(user)
+            data: formatAuthUser(user, rankInfo)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -230,10 +234,11 @@ exports.updateProfile = async (req, res) => {
             new: true,
             runValidators: true
         }).select('-password');
+        const rankInfo = await getRankInfoByStudentId(user._id);
 
         res.status(200).json({
             success: true,
-            data: formatAuthUser(user)
+            data: formatAuthUser(user, rankInfo)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

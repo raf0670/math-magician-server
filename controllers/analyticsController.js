@@ -3,6 +3,7 @@ const Exam = require('../models/Exam');
 const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
 const { HOUSES, HOUSE_META, normalizeCompetitionCategory, normalizeHouse } = require('../config/competition');
+const { getDefaultRankInfo, getRankInfoByStudentId, buildRankInfoMapFromSubmissions } = require('../services/rankService');
 
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 
@@ -47,14 +48,14 @@ function sortCompetitionEntries(first, second) {
 
 async function getCompetitionData() {
     const exams = await Exam.find({ isLiveExam: true })
-        .select('title totalMarks duration competitionCategory startTime endTime createdAt')
+        .select('title totalMarks duration competitionCategory examType isLiveExam startTime endTime createdAt')
         .sort({ startTime: 1, createdAt: 1 })
         .lean();
     const examIds = exams.map((exam) => exam._id);
     const submissions = examIds.length
         ? await Submission.find({ exam: { $in: examIds } })
             .populate('student', 'name email house')
-            .populate('exam', 'title competitionCategory startTime endTime')
+            .populate('exam', 'title totalMarks competitionCategory examType isLiveExam startTime endTime')
             .sort({ submittedAt: 1 })
             .lean()
         : [];
@@ -135,12 +136,18 @@ async function getCompetitionData() {
         }
     }
 
+    const rankInfoByStudentId = buildRankInfoMapFromSubmissions(
+        submissions,
+        [...leaderboardByStudentId.keys()]
+    );
+
     const leaderboard = [...leaderboardByStudentId.values()]
         .map((entry) => ({
             ...entry,
             totalScore: Number(entry.totalScore.toFixed(2)),
             averageScore: entry.examsTaken ? Number((entry.totalScore / entry.examsTaken).toFixed(2)) : 0,
-            badgeCount: badgeCountByStudentId.get(entry.studentId) || 0
+            badgeCount: badgeCountByStudentId.get(entry.studentId) || 0,
+            rankInfo: rankInfoByStudentId.get(entry.studentId) || getDefaultRankInfo()
         }))
         .sort(sortCompetitionEntries)
         .map((entry, index) => ({ ...entry, rank: index + 1 }));
@@ -219,9 +226,10 @@ exports.getCompetitionSummary = async (req, res) => {
 
 exports.getStudentStats = async (req, res) => {
     try {
-        const [questionBankCount, availableExamCount] = await Promise.all([
+        const [questionBankCount, availableExamCount, rankInfo] = await Promise.all([
             QuestionBank.countDocuments(),
-            Exam.countDocuments(buildOfficialExamFilter())
+            Exam.countDocuments(buildOfficialExamFilter()),
+            getRankInfoByStudentId(req.user.id)
         ]);
 
         const history = await Submission.find({ student: req.user.id })
@@ -239,8 +247,10 @@ exports.getStudentStats = async (req, res) => {
                     totalPossibleMarks: 0,
                     accuracyPercentage: 0,
                     questionBankCount,
-                    availableExamCount
+                    availableExamCount,
+                    rankInfo
                 },
+                rankInfo,
                 history: []
             });
         }
@@ -262,8 +272,10 @@ exports.getStudentStats = async (req, res) => {
                 totalPossibleMarks,
                 accuracyPercentage,
                 questionBankCount,
-                availableExamCount
+                availableExamCount,
+                rankInfo
             },
+            rankInfo,
             history
         });
     } catch (error) {
