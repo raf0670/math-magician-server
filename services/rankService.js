@@ -5,7 +5,7 @@ const RANK_TIERS = ['Silver', 'Gold', 'Platinum', 'Master', 'Challenger', 'Legen
 const RANK_LEVELS = ['III', 'II', 'I'];
 const POINTS_PER_LEVEL = 20;
 const CATEGORY_MAX_POINTS = {
-    daily: 15,
+    daily: 10,
     weekly: 20
 };
 

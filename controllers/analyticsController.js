@@ -3,7 +3,7 @@ const Exam = require('../models/Exam');
 const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
 const { HOUSES, HOUSE_META, normalizeCompetitionCategory, normalizeHouse } = require('../config/competition');
-const { getDefaultRankInfo, getRankInfoByStudentId, buildRankInfoMapFromSubmissions } = require('../services/rankService');
+const { getDefaultRankInfo, getRankInfoByStudentId, getRankInfoByStudentIds, buildRankInfoMapFromSubmissions } = require('../services/rankService');
 
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 
@@ -335,6 +335,9 @@ exports.getAdminExamSubmissions = async (req, res) => {
             .populate('reinstatedBy', 'name email')
             .sort({ score: -1, submittedAt: 1 })
             .lean();
+        const rankInfoByStudentId = await getRankInfoByStudentIds(
+            submissions.map((submission) => getStudentId(submission.student))
+        );
 
         res.status(200).json({
             success: true,
@@ -346,7 +349,8 @@ exports.getAdminExamSubmissions = async (req, res) => {
                 submissions: submissions.map((submission) => ({
                     ...submission,
                     student: formatStudent(submission.student),
-                    effectiveScore: getEffectiveScore(submission)
+                    effectiveScore: getEffectiveScore(submission),
+                    rankInfo: rankInfoByStudentId.get(getStudentId(submission.student)) || getDefaultRankInfo()
                 }))
             }
         });
@@ -394,13 +398,15 @@ exports.updateSubmissionModeration = async (req, res) => {
             .populate('disqualifiedBy', 'name email')
             .populate('reinstatedBy', 'name email')
             .lean();
+        const rankInfo = await getRankInfoByStudentId(getStudentId(updatedSubmission.student));
 
         res.status(200).json({
             success: true,
             data: {
                 ...updatedSubmission,
                 student: formatStudent(updatedSubmission.student),
-                effectiveScore: getEffectiveScore(updatedSubmission)
+                effectiveScore: getEffectiveScore(updatedSubmission),
+                rankInfo
             }
         });
     } catch (error) {
