@@ -51,7 +51,12 @@ const QuestionBankSchema = new mongoose.Schema({
     },
     chapter: {
         type: String,
-        required: [true, 'Please add a chapter or topic name'],
+        required: [
+            function requireChapterForReusableQuestions() {
+                return this.source !== 'liveExam';
+            },
+            'Please add a chapter or topic name'
+        ],
         trim: true
     },
     topic: {

@@ -781,7 +781,7 @@ function parseLiveExamPayload(body = {}, userId) {
         const subject = clean(item.subject);
         const topic = clean(item.topic);
         const subTopic = clean(item.subTopic);
-        const difficulty = clean(item.difficulty);
+        const difficulty = clean(item.difficulty) || 'Medium';
         const questionText = clean(item.question || item.questionText);
         const explanation = clean(item.explanation);
         const rawOptions = Array.isArray(item.options) ? item.options.map(clean) : [];
@@ -789,9 +789,6 @@ function parseLiveExamPayload(body = {}, userId) {
         const correctAnswer = clean(item.correct_answer || item.correctAnswer);
 
         if (!subject) errors.push(`Question ${questionIndex + 1}: subject is required.`);
-        if (!topic) errors.push(`Question ${questionIndex + 1}: topic is required.`);
-        if (!subTopic) errors.push(`Question ${questionIndex + 1}: sub-topic is required.`);
-        if (!difficulty) errors.push(`Question ${questionIndex + 1}: difficulty is required.`);
         if (!questionText) errors.push(`Question ${questionIndex + 1}: question text is required.`);
         if (!explanation) errors.push(`Question ${questionIndex + 1}: explanation is required.`);
         if (rawOptions.length !== 5 || rawOptions.some((option) => !option)) {
