@@ -61,10 +61,16 @@ function getEffectiveScore(submission) {
 
 function shouldCountExam(exam, now = new Date()) {
     if (!exam?.isLiveExam) return false;
-    if (exam.examType && exam.examType !== 'official') return false;
+    if (exam.examType && !['official', 'assessment'].includes(exam.examType)) return false;
+
+    if (exam.examType === 'assessment') {
+        const startTime = exam.startTime ? new Date(exam.startTime) : null;
+        if (startTime && !Number.isNaN(startTime.getTime()) && startTime > now) return false;
+        return Number(exam.totalMarks) > 0;
+    }
 
     const category = normalizeCompetitionCategory(exam.competitionCategory);
-    if (!CATEGORY_MAX_POINTS[category]) return false;
+    if (exam.examType !== 'assessment' && !CATEGORY_MAX_POINTS[category]) return false;
 
     const endTime = exam.endTime ? new Date(exam.endTime) : null;
     if (!endTime || Number.isNaN(endTime.getTime()) || endTime > now) return false;
@@ -75,6 +81,11 @@ function shouldCountExam(exam, now = new Date()) {
 function getRankPointsForSubmission(submission, now = new Date()) {
     const exam = submission?.exam;
     if (!shouldCountExam(exam, now)) return null;
+
+    if (exam.examType === 'assessment') {
+        const assessmentPoints = getEffectiveScore(submission);
+        return Number.isFinite(assessmentPoints) ? assessmentPoints : null;
+    }
 
     const category = normalizeCompetitionCategory(exam.competitionCategory);
     const maxPoints = CATEGORY_MAX_POINTS[category];
@@ -116,7 +127,7 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
     if (!normalizedStudentIds.length) return new Map();
 
     const submissions = await Submission.find({ student: { $in: normalizedStudentIds } })
-        .populate('exam', 'totalMarks competitionCategory isLiveExam examType endTime')
+        .populate('exam', 'totalMarks competitionCategory isLiveExam examType startTime endTime')
         .lean();
 
     return buildRankInfoMapFromSubmissions(submissions, normalizedStudentIds, options);
