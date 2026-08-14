@@ -28,8 +28,21 @@ const ExamSchema = new mongoose.Schema({
     },
     examType: {
         type: String,
-        enum: ['official', 'generatedPractice', 'generatedQuiz'],
+        enum: ['official', 'assessment', 'generatedPractice', 'generatedQuiz'],
         default: 'official',
+        index: true
+    },
+    examCode: {
+        type: String,
+        trim: true,
+        index: true,
+        unique: true,
+        sparse: true
+    },
+    questionSource: {
+        type: String,
+        enum: ['QuestionBank', 'AssessmentTest'],
+        default: 'QuestionBank',
         index: true
     },
     competitionCategory: {

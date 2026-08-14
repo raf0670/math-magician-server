@@ -47,7 +47,12 @@ function sortCompetitionEntries(first, second) {
 }
 
 async function getCompetitionData() {
-    const exams = await Exam.find({ isLiveExam: true })
+    const exams = await Exam.find({
+        $and: [
+            { isLiveExam: true },
+            buildOfficialExamFilter()
+        ]
+    })
         .select('title totalMarks duration competitionCategory examType isLiveExam startTime endTime createdAt')
         .sort({ startTime: 1, createdAt: 1 })
         .lean();

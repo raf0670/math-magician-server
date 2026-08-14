@@ -43,6 +43,16 @@ function buildOfficialExamFilter() {
     };
 }
 
+function buildOfficialLiveExamFilter() {
+    return {
+        isLiveExam: true,
+        $or: [
+            { examType: 'official' },
+            { examType: { $exists: false } }
+        ]
+    };
+}
+
 function buildQuestionSelect(includeAnswers = false) {
     const baseFields = 'questionNo question_no set_number question questionText options subject difficulty chapter topic subTopic explanation source createdBy';
     return includeAnswers ? `${baseFields} correctOptionIndex correctAnswer correct_answer` : baseFields;
@@ -1185,7 +1195,7 @@ exports.startQuizExam = async (req, res) => {
 // @access  Private
 exports.getLiveExams = async (req, res) => {
     try {
-        const exams = await Exam.find({ isLiveExam: true })
+        const exams = await Exam.find(buildOfficialLiveExamFilter())
             .sort({ startTime: -1 })
             .select('title duration totalMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
             .lean();
@@ -1219,7 +1229,7 @@ exports.getLiveExams = async (req, res) => {
 // @access  Private/Admin
 exports.getAdminLiveExams = async (req, res) => {
     try {
-        const exams = await Exam.find({ isLiveExam: true })
+        const exams = await Exam.find(buildOfficialLiveExamFilter())
             .sort({ startTime: -1 })
             .populate({
                 path: 'questions',

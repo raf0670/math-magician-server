@@ -17,6 +17,7 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/classes', require('./routes/liveClassRoutes'));
 app.use('/api/exams', require('./routes/examRoutes'));
+app.use('/api/assessment-test', require('./routes/assessmentRoutes'));
 app.use('/api/analytics', require('./routes/analyticsRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
 
