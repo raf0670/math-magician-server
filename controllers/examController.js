@@ -3,6 +3,7 @@ const Submission = require('../models/Submission');
 const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
 const { normalizeCompetitionCategory } = require('../config/competition');
+const { getAreaBalancedQuizUnits, getQuestionEffectiveArea } = require('../utils/quizBalancer');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
@@ -364,7 +365,10 @@ async function getRandomGroupedSetRows(questionFilter, groupedTopicRule, exclude
         {
             $group: {
                 _id: '$set_number',
-                count: { $sum: 1 }
+                count: { $sum: 1 },
+                subTopic: { $first: '$subTopic' },
+                topic: { $first: '$topic' },
+                chapter: { $first: '$chapter' }
             }
         }
     ]);
@@ -423,6 +427,20 @@ async function selectRandomQuestions(questionFilter, limit, excludedQuestionIds 
     ]);
 }
 
+async function selectAreaBalancedRandomQuestions(questionFilter, limit, excludedQuestionIds = []) {
+    if (limit < 1) return [];
+
+    const candidateQuestions = await QuestionBank.find(withExcludedQuestionIds(questionFilter, excludedQuestionIds)).lean();
+    const candidateUnits = candidateQuestions.map((question) => ({
+        type: 'question',
+        question
+    }));
+
+    return getAreaBalancedQuizUnits(candidateUnits)
+        .slice(0, limit)
+        .map((unit) => unit.question);
+}
+
 async function selectSubjectQuizQuestions(subject, questionFilter, limit, excludedQuestionIds = [], excludedGroupKeys = []) {
     if (limit < 1) return [];
 
@@ -432,14 +450,13 @@ async function selectSubjectQuizQuestions(subject, questionFilter, limit, exclud
     const groupedTopicRules = getGroupedTopicRulesForSubject(subject);
 
     if (!groupedTopicRules.length) {
-        return selectRandomQuestions(questionFilter, limit, selectedQuestionIds);
+        return selectAreaBalancedRandomQuestions(questionFilter, limit, selectedQuestionIds);
     }
 
-    const nonGroupedQuestions = await selectRandomQuestions(
+    const nonGroupedQuestions = await QuestionBank.find(withExcludedQuestionIds(
         buildFilter(questionFilter, buildNotGroupedTopicFieldFilter(subject)),
-        limit,
         selectedQuestionIds
-    );
+    )).lean();
     const groupedSetUnits = [];
 
     for (const groupedTopicRule of groupedTopicRules) {
@@ -448,11 +465,12 @@ async function selectSubjectQuizQuestions(subject, questionFilter, limit, exclud
             type: 'groupedSet',
             groupedTopicRule,
             setNumber: setRow._id,
-            groupKey: buildGroupKey(groupedTopicRule, setRow._id)
+            groupKey: buildGroupKey(groupedTopicRule, setRow._id),
+            area: getQuestionEffectiveArea(setRow)
         })));
     }
 
-    const candidateUnits = shuffleQuestions([
+    const candidateUnits = getAreaBalancedQuizUnits([
         ...nonGroupedQuestions.map((question) => ({ type: 'question', question })),
         ...groupedSetUnits
     ]);
@@ -477,7 +495,7 @@ async function selectSubjectQuizQuestions(subject, questionFilter, limit, exclud
     }
 
     if (selectedQuestions.length < limit) {
-        const fallbackQuestions = await selectRandomQuestions(
+        const fallbackQuestions = await selectAreaBalancedRandomQuestions(
             buildFilter(questionFilter, buildNotGroupedTopicFieldFilter(subject)),
             limit - selectedQuestions.length,
             selectedQuestionIds
