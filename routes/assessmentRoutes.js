@@ -5,10 +5,10 @@ const {
     getAssessmentSummary,
     submitAssessmentExam
 } = require('../controllers/assessmentController');
-const { protect, authorizeApprovedAccess } = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
 
-router.get('/', protect, authorizeApprovedAccess, getAssessmentSummary);
-router.get('/exam', protect, authorizeApprovedAccess, getAssessmentExam);
-router.post('/submit', protect, authorizeApprovedAccess, submitAssessmentExam);
+router.get('/', protect, getAssessmentSummary);
+router.get('/exam', protect, getAssessmentExam);
+router.post('/submit', protect, submitAssessmentExam);
 
 module.exports = router;

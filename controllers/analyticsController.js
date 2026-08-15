@@ -21,6 +21,20 @@ function buildOfficialExamFilter() {
     };
 }
 
+function buildCompetitionExamFilter() {
+    return {
+        $or: [
+            {
+                $and: [
+                    { isLiveExam: true },
+                    buildOfficialExamFilter()
+                ]
+            },
+            { examType: 'assessment' }
+        ]
+    };
+}
+
 function getEffectiveScore(submission) {
     return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
 }
@@ -47,12 +61,7 @@ function sortCompetitionEntries(first, second) {
 }
 
 async function getCompetitionData() {
-    const exams = await Exam.find({
-        $and: [
-            { isLiveExam: true },
-            buildOfficialExamFilter()
-        ]
-    })
+    const exams = await Exam.find(buildCompetitionExamFilter())
         .select('title totalMarks duration competitionCategory examType isLiveExam startTime endTime createdAt')
         .sort({ startTime: 1, createdAt: 1 })
         .lean();
@@ -417,4 +426,9 @@ exports.updateSubmissionModeration = async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
+};
+
+exports._private = {
+    buildCompetitionExamFilter,
+    buildOfficialExamFilter
 };

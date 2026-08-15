@@ -2,12 +2,11 @@ const mongoose = require('mongoose');
 const AssessmentTest = require('../models/AssessmentTest');
 const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
+const { getRankInfoByStudentId } = require('../services/rankService');
 
 const ASSESSMENT_EXAM_CODE = 'assessment-test-2026-08-16';
 const ASSESSMENT_TITLE = 'Assessment Test';
-const ASSESSMENT_START_TIME = new Date('2026-08-16T15:00:00.000Z');
-const ASSESSMENT_END_TIME = new Date('2026-08-16T16:30:00.000Z');
-const ASSESSMENT_DURATION_MINUTES = 90;
+const ASSESSMENT_DURATION_MINUTES = 0;
 const ASSESSMENT_NEGATIVE_MARKS = 0.25;
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
@@ -40,10 +39,8 @@ function normalizeSubmissionReason(value) {
     return SUBMISSION_REASONS.has(reason) ? reason : 'manual';
 }
 
-function getAssessmentStatus(now = new Date()) {
-    if (now < ASSESSMENT_START_TIME) return 'upcoming';
-    if (now <= ASSESSMENT_END_TIME) return 'open';
-    return 'ended';
+function getAssessmentStatus() {
+    return 'open';
 }
 
 function getIdString(value) {
@@ -173,19 +170,23 @@ async function syncAssessmentExamShell(questionSet) {
     return Exam.findOneAndUpdate(
         { examCode: ASSESSMENT_EXAM_CODE },
         {
-            title: ASSESSMENT_TITLE,
-            questions: questionIds,
-            duration: ASSESSMENT_DURATION_MINUTES,
-            totalMarks: questionIds.length,
-            negativeMarksPerQuestion: ASSESSMENT_NEGATIVE_MARKS,
-            examType: 'assessment',
-            examCode: ASSESSMENT_EXAM_CODE,
-            questionSource: 'AssessmentTest',
-            competitionCategory: 'daily',
-            allowRetakes: false,
-            isLiveExam: true,
-            startTime: ASSESSMENT_START_TIME,
-            endTime: ASSESSMENT_END_TIME
+            $set: {
+                title: ASSESSMENT_TITLE,
+                questions: questionIds,
+                duration: ASSESSMENT_DURATION_MINUTES,
+                totalMarks: questionIds.length,
+                negativeMarksPerQuestion: ASSESSMENT_NEGATIVE_MARKS,
+                examType: 'assessment',
+                examCode: ASSESSMENT_EXAM_CODE,
+                questionSource: 'AssessmentTest',
+                competitionCategory: 'daily',
+                allowRetakes: false,
+                isLiveExam: false
+            },
+            $unset: {
+                startTime: '',
+                endTime: ''
+            }
         },
         {
             new: true,
@@ -287,7 +288,8 @@ function buildSubmissionResponse(submission, exam, options = {}) {
         answers: submission.answers || [],
         submissionReason: normalizeSubmissionReason(submission.submissionReason),
         submissionId: submission._id,
-        alreadySubmitted: Boolean(options.alreadySubmitted)
+        alreadySubmitted: Boolean(options.alreadySubmitted),
+        rankInfo: options.rankInfo || null
     };
 }
 
@@ -318,9 +320,9 @@ exports.getAssessmentSummary = async (req, res) => {
                 totalMarks: exam.totalMarks,
                 negativeMarksPerQuestion: ASSESSMENT_NEGATIVE_MARKS,
                 examType: exam.examType,
-                isLiveExam: true,
-                startTime: exam.startTime,
-                endTime: exam.endTime,
+                isLiveExam: false,
+                startTime: exam.startTime || null,
+                endTime: exam.endTime || null,
                 status,
                 questionCount: questionSet.validQuestions.length,
                 rawQuestionCount: questionSet.rawQuestionCount,
@@ -333,10 +335,10 @@ exports.getAssessmentSummary = async (req, res) => {
                         submittedAt: submission.submittedAt
                     }
                     : null,
-                canPreview: admin && status === 'upcoming',
-                canEnter: status === 'open' || status === 'ended' || (admin && status === 'upcoming'),
-                canSubmit: status === 'open',
-                canReview: status === 'ended'
+                canPreview: false,
+                canEnter: true,
+                canSubmit: true,
+                canReview: false
             }
         });
     } catch (error) {
@@ -347,8 +349,7 @@ exports.getAssessmentSummary = async (req, res) => {
 
 exports.getAssessmentExam = async (req, res) => {
     try {
-        const { exam, questionSet, status } = await getAssessmentContext();
-        const admin = isAdmin(req.user);
+        const { exam, questionSet } = await getAssessmentContext();
 
         if (!questionSet.validQuestions.length) {
             return res.status(404).json({
@@ -358,19 +359,9 @@ exports.getAssessmentExam = async (req, res) => {
             });
         }
 
-        if (status === 'upcoming' && !admin) {
-            return res.status(403).json({
-                success: false,
-                message: `This assessment test unlocks on ${ASSESSMENT_START_TIME.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' })} Bangladesh time.`
-            });
-        }
-
-        const includeAnswers = status === 'ended' || (admin && status === 'upcoming');
-        const assessmentMode = admin && status === 'upcoming' ? 'preview' : 'exam';
-
         res.status(200).json({
             success: true,
-            data: buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode })
+            data: buildAssessmentExamPayload(exam, questionSet, { includeAnswers: false, assessmentMode: 'exam' })
         });
     } catch (error) {
         console.error('[assessmentController:getAssessmentExam]', error);
@@ -392,26 +383,12 @@ exports.submitAssessmentExam = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Please submit answers as an array of selected option indexes.' });
         }
 
-        const { exam, questionSet, status } = await getAssessmentContext();
+        const { exam, questionSet } = await getAssessmentContext();
 
         if (!questionSet.validQuestions.length) {
             return res.status(400).json({
                 success: false,
                 message: 'This assessment test has no valid questions to grade.'
-            });
-        }
-
-        if (status === 'upcoming') {
-            return res.status(403).json({
-                success: false,
-                message: 'This assessment test has not started yet.'
-            });
-        }
-
-        if (status === 'ended') {
-            return res.status(403).json({
-                success: false,
-                message: 'The assessment test submission portal has closed.'
             });
         }
 
@@ -422,7 +399,8 @@ exports.submitAssessmentExam = async (req, res) => {
         });
 
         if (existingSubmission) {
-            return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
+            const rankInfo = await getRankInfoByStudentId(studentId);
+            return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true, rankInfo }));
         }
 
         const graded = gradeAnswers(normalizedExam, answers);
@@ -436,7 +414,8 @@ exports.submitAssessmentExam = async (req, res) => {
                 submissionReason
             });
 
-            return res.status(201).json(buildSubmissionResponse(submission, normalizedExam));
+            const rankInfo = await getRankInfoByStudentId(studentId);
+            return res.status(201).json(buildSubmissionResponse(submission, normalizedExam, { rankInfo }));
         } catch (error) {
             if (error.code !== 11000) throw error;
 
@@ -446,7 +425,8 @@ exports.submitAssessmentExam = async (req, res) => {
             });
 
             if (!duplicateSubmission) throw error;
-            return res.status(200).json(buildSubmissionResponse(duplicateSubmission, normalizedExam, { alreadySubmitted: true }));
+            const rankInfo = await getRankInfoByStudentId(studentId);
+            return res.status(200).json(buildSubmissionResponse(duplicateSubmission, normalizedExam, { alreadySubmitted: true, rankInfo }));
         }
     } catch (error) {
         console.error('[assessmentController:submitAssessmentExam]', error);

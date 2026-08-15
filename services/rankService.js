@@ -60,17 +60,17 @@ function getEffectiveScore(submission) {
 }
 
 function shouldCountExam(exam, now = new Date()) {
-    if (!exam?.isLiveExam) return false;
-    if (exam.examType && !['official', 'assessment'].includes(exam.examType)) return false;
-
     if (exam.examType === 'assessment') {
         const startTime = exam.startTime ? new Date(exam.startTime) : null;
         if (startTime && !Number.isNaN(startTime.getTime()) && startTime > now) return false;
         return Number(exam.totalMarks) > 0;
     }
 
+    if (!exam?.isLiveExam) return false;
+    if (exam.examType && exam.examType !== 'official') return false;
+
     const category = normalizeCompetitionCategory(exam.competitionCategory);
-    if (exam.examType !== 'assessment' && !CATEGORY_MAX_POINTS[category]) return false;
+    if (!CATEGORY_MAX_POINTS[category]) return false;
 
     const endTime = exam.endTime ? new Date(exam.endTime) : null;
     if (!endTime || Number.isNaN(endTime.getTime()) || endTime > now) return false;
