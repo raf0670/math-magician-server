@@ -39,6 +39,17 @@ function getEffectiveScore(submission) {
     return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
 }
 
+function isPendingOfficialLiveExam(exam, now = new Date()) {
+    if (!exam?.isLiveExam || (exam.examType && exam.examType !== 'official')) return false;
+
+    const endTime = exam.endTime ? new Date(exam.endTime) : null;
+    return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now <= endTime);
+}
+
+function isSubmissionResultAvailable(submission, now = new Date()) {
+    return !isPendingOfficialLiveExam(submission?.exam, now);
+}
+
 function getStudentId(value) {
     return value?._id?.toString?.() || value?.toString?.() || '';
 }
@@ -61,6 +72,7 @@ function sortCompetitionEntries(first, second) {
 }
 
 async function getCompetitionData() {
+    const now = new Date();
     const exams = await Exam.find(buildCompetitionExamFilter())
         .select('title totalMarks duration competitionCategory examType isLiveExam startTime endTime createdAt')
         .sort({ startTime: 1, createdAt: 1 })
@@ -73,13 +85,14 @@ async function getCompetitionData() {
             .sort({ submittedAt: 1 })
             .lean()
         : [];
+    const finalizedSubmissions = submissions.filter((submission) => isSubmissionResultAvailable(submission, now));
 
     const leaderboardByStudentId = new Map();
     const badgeCountByStudentId = new Map();
     const badges = [];
     const houseResultsByHouse = new Map(HOUSES.map((house) => [house, []]));
 
-    for (const submission of submissions) {
+    for (const submission of finalizedSubmissions) {
         const student = formatStudent(submission.student);
         if (!student?.studentId) continue;
 
@@ -105,7 +118,7 @@ async function getCompetitionData() {
 
     for (const exam of exams) {
         const examId = exam._id.toString();
-        const examSubmissions = submissions.filter((submission) => (
+        const examSubmissions = finalizedSubmissions.filter((submission) => (
             submission.exam?._id?.toString() === examId || submission.exam?.toString?.() === examId
         ));
         const validSubmissions = examSubmissions.filter((submission) => !submission.isDisqualified);
@@ -151,8 +164,9 @@ async function getCompetitionData() {
     }
 
     const rankInfoByStudentId = buildRankInfoMapFromSubmissions(
-        submissions,
-        [...leaderboardByStudentId.keys()]
+        finalizedSubmissions,
+        [...leaderboardByStudentId.keys()],
+        { now }
     );
 
     const leaderboard = [...leaderboardByStudentId.values()]
@@ -184,7 +198,7 @@ async function getCompetitionData() {
             ...exam,
             competitionCategory: normalizeCompetitionCategory(exam.competitionCategory)
         })),
-        submissions,
+        submissions: finalizedSubmissions,
         leaderboard,
         houseStandings,
         badges,
@@ -247,10 +261,12 @@ exports.getStudentStats = async (req, res) => {
         ]);
 
         const history = await Submission.find({ student: req.user.id })
-            .populate('exam', 'title totalMarks duration examType competitionCategory isLiveExam')
-            .sort({ submittedAt: -1 });
+            .populate('exam', 'title totalMarks duration examType competitionCategory isLiveExam startTime endTime')
+            .sort({ submittedAt: -1 })
+            .lean();
+        const visibleHistory = history.filter((item) => isSubmissionResultAvailable(item));
 
-        if (history.length === 0) {
+        if (visibleHistory.length === 0) {
             return res.status(200).json({
                 success: true,
                 message: 'No exam history found yet. Take your first test to initialize analytics!',
@@ -269,9 +285,9 @@ exports.getStudentStats = async (req, res) => {
             });
         }
 
-        const totalExams = history.length;
-        const totalPointsEarned = history.reduce((sum, item) => sum + getEffectiveScore(item), 0);
-        const totalPossibleMarks = history.reduce((sum, item) => sum + (item.exam?.totalMarks || 0), 0);
+        const totalExams = visibleHistory.length;
+        const totalPointsEarned = visibleHistory.reduce((sum, item) => sum + getEffectiveScore(item), 0);
+        const totalPossibleMarks = visibleHistory.reduce((sum, item) => sum + (item.exam?.totalMarks || 0), 0);
         const averageScore = parseFloat((totalPointsEarned / totalExams).toFixed(2));
         const accuracyPercentage = totalPossibleMarks
             ? parseFloat(((totalPointsEarned / totalPossibleMarks) * 100).toFixed(1))
@@ -290,7 +306,7 @@ exports.getStudentStats = async (req, res) => {
                 rankInfo
             },
             rankInfo,
-            history
+            history: visibleHistory
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -302,6 +318,19 @@ exports.getExamLeaderboard = async (req, res) => {
         const { examId } = req.params;
         if (!mongoose.Types.ObjectId.isValid(examId)) {
             return res.status(404).json({ success: false, message: 'Exam was not found.' });
+        }
+
+        const exam = await Exam.findById(examId)
+            .select('examType isLiveExam endTime')
+            .lean();
+        if (exam && isPendingOfficialLiveExam(exam)) {
+            return res.status(200).json({
+                success: true,
+                count: 0,
+                resultsAvailable: false,
+                resultsAvailableAt: exam.endTime,
+                data: []
+            });
         }
 
         const submissions = await Submission.find({ exam: examId })
@@ -430,5 +459,7 @@ exports.updateSubmissionModeration = async (req, res) => {
 
 exports._private = {
     buildCompetitionExamFilter,
-    buildOfficialExamFilter
+    buildOfficialExamFilter,
+    isPendingOfficialLiveExam,
+    isSubmissionResultAvailable
 };

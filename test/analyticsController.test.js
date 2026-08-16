@@ -15,3 +15,42 @@ test('competition exam filter still requires non-assessment exams to be live off
     assert.deepEqual(liveOfficialBranch[0], { isLiveExam: true });
     assert.deepEqual(liveOfficialBranch[1], _private.buildOfficialExamFilter());
 });
+
+test('official live exam submissions are unavailable before the exam end time', () => {
+    const submission = {
+        exam: {
+            examType: 'official',
+            isLiveExam: true,
+            endTime: new Date('2026-08-16T16:00:00.000Z')
+        },
+        score: 9
+    };
+
+    assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-16T15:59:59.000Z')), false);
+});
+
+test('official live exam submissions are available after the exam end time', () => {
+    const submission = {
+        exam: {
+            examType: 'official',
+            isLiveExam: true,
+            endTime: new Date('2026-08-16T16:00:00.000Z')
+        },
+        score: 9
+    };
+
+    assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-16T16:00:01.000Z')), true);
+});
+
+test('assessment submissions keep their existing analytics availability', () => {
+    const submission = {
+        exam: {
+            examType: 'assessment',
+            isLiveExam: true,
+            endTime: new Date('2026-08-16T16:00:00.000Z')
+        },
+        score: 42
+    };
+
+    assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-16T15:30:00.000Z')), true);
+});

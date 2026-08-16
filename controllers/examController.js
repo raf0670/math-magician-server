@@ -76,6 +76,17 @@ function getLiveExamStatus(exam, now = new Date()) {
     return 'ended';
 }
 
+function isOfficialLiveExam(exam) {
+    return Boolean(exam?.isLiveExam && (!exam.examType || exam.examType === 'official'));
+}
+
+function areLiveExamResultsAvailable(exam, now = new Date()) {
+    if (!isOfficialLiveExam(exam)) return true;
+
+    const endTime = exam?.endTime ? new Date(exam.endTime) : null;
+    return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now > endTime);
+}
+
 function calculateDurationMinutes(startTime, endTime) {
     const durationMs = endTime.getTime() - startTime.getTime();
     return Math.max(1, Math.ceil(durationMs / 60000));
@@ -782,6 +793,63 @@ function buildSubmissionResponse(submission, normalizedExam, options = {}) {
     };
 }
 
+function buildPendingLiveSubmissionResponse(submission, normalizedExam, options = {}) {
+    return {
+        success: true,
+        message: options.alreadySubmitted
+            ? 'Your answer sheet was already submitted. Results will unlock after the live exam deadline.'
+            : 'Your answer sheet has been submitted. Results will unlock after the live exam deadline.',
+        submitted: true,
+        submittedAt: submission.submittedAt,
+        submissionId: submission._id,
+        submissionReason: normalizeSubmissionReason(submission.submissionReason),
+        alreadySubmitted: Boolean(options.alreadySubmitted),
+        resultsAvailable: false,
+        resultsAvailableAt: normalizedExam.endTime
+    };
+}
+
+function buildStudentSubmissionResponse(submission, normalizedExam, options = {}) {
+    if (!isOfficialLiveExam(normalizedExam)) {
+        return buildSubmissionResponse(submission, normalizedExam, options);
+    }
+
+    if (!areLiveExamResultsAvailable(normalizedExam, options.now)) {
+        return buildPendingLiveSubmissionResponse(submission, normalizedExam, options);
+    }
+
+    return {
+        ...buildSubmissionResponse(submission, normalizedExam, options),
+        submitted: true,
+        resultsAvailable: true,
+        resultsAvailableAt: normalizedExam.endTime || null
+    };
+}
+
+async function attachStudentLiveSubmissionState(exam, studentId, now = new Date()) {
+    if (!exam || !studentId) return exam;
+
+    const submission = await Submission.findOne({
+        student: studentId,
+        exam: exam._id
+    }).lean();
+
+    if (!submission) return exam;
+
+    const submissionPayload = buildStudentSubmissionResponse(submission, exam, { now, alreadySubmitted: true });
+    if (submissionPayload.resultsAvailable) {
+        return {
+            ...exam,
+            submissionResult: submissionPayload
+        };
+    }
+
+    return {
+        ...exam,
+        submissionReceipt: submissionPayload
+    };
+}
+
 function normalizeLabeledOption(option, index) {
     const text = clean(option);
     const label = OPTION_LABELS[index];
@@ -872,6 +940,7 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
     const plainExam = exam.toObject ? exam.toObject() : exam;
     const examId = plainExam._id?.toString();
     const submission = examId ? submissionByExamId.get(examId) : null;
+    const resultsAvailable = areLiveExamResultsAvailable(plainExam);
     const questionIds = (plainExam.questions || []).map(getIdString).filter(Boolean);
     const questionCount = existingQuestionIdSet
         ? questionIds.filter((questionId) => existingQuestionIdSet.has(questionId)).length
@@ -885,10 +954,13 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
         missingQuestionCount: Math.max(0, questionIds.length - questionCount),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         hasSubmitted: Boolean(submission),
+        resultsAvailable,
+        resultsAvailableAt: plainExam.endTime || null,
         submission: submission
             ? {
-                score: submission.score,
-                submittedAt: submission.submittedAt
+                submittedAt: submission.submittedAt,
+                resultsAvailable,
+                ...(resultsAvailable ? { score: submission.score } : {})
             }
             : null
     };
@@ -1415,9 +1487,13 @@ exports.getExam = async (req, res) => {
             }
 
             const includeAnswers = currentTime > endTime;
+            const responseExam = includeAnswers
+                ? await attachStudentLiveSubmissionState(liveExam, req.user?._id || req.user?.id, currentTime)
+                : await attachStudentLiveSubmissionState(redactExamForStudent(liveExam), req.user?._id || req.user?.id, currentTime);
+
             return res.status(200).json({
                 success: true,
-                data: includeAnswers ? liveExam : redactExamForStudent(liveExam)
+                data: responseExam
             });
         }
 
@@ -1484,7 +1560,7 @@ exports.submitExam = async (req, res) => {
             });
 
             if (existingSubmission) {
-                return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
+                return res.status(200).json(buildStudentSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
             }
         }
 
@@ -1525,7 +1601,7 @@ exports.submitExam = async (req, res) => {
                 submissionReason
             });
 
-            return res.status(201).json(buildSubmissionResponse(submission, normalizedExam));
+            return res.status(201).json(buildStudentSubmissionResponse(submission, normalizedExam));
         } catch (error) {
             if (error.code !== 11000) throw error;
 
@@ -1535,11 +1611,18 @@ exports.submitExam = async (req, res) => {
             });
 
             if (!existingSubmission) throw error;
-            return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
+            return res.status(200).json(buildStudentSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
         }
 
     } catch (error) {
         logExamError('submitExam', error);
         res.status(500).json({ success: false, message: error.message });
     }
+};
+
+exports._private = {
+    areLiveExamResultsAvailable,
+    buildPendingLiveSubmissionResponse,
+    buildStudentSubmissionResponse,
+    serializeExamSummary
 };
