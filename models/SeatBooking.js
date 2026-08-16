@@ -106,7 +106,7 @@ const SeatBookingSchema = new mongoose.Schema({
     preferredBatch: {
         type: String,
         required: true,
-        enum: ['Farmgate', 'Bailey Road', 'Online']
+        enum: ['Farmgate', 'Farmgate - Gryffindor 2.0', 'Bailey Road', 'Online']
     }
 }, { timestamps: true });
 

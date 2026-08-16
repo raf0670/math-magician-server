@@ -33,6 +33,7 @@ const HOUSE_META = {
 
 const PLAN_TO_HOUSE = {
     offline: 'Gryffindor',
+    gryffindor2: 'Gryffindor',
     online: 'Hufflepuff',
     premium: 'Ravenclaw',
     mathAdvanced: 'Slytherin'
@@ -40,6 +41,7 @@ const PLAN_TO_HOUSE = {
 
 const BATCH_TO_HOUSE = {
     Farmgate: 'Gryffindor',
+    'Farmgate - Gryffindor 2.0': 'Gryffindor',
     'Bailey Road': 'Hufflepuff',
     Online: 'Ravenclaw',
     'Math Advanced': 'Slytherin'

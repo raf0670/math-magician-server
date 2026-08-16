@@ -6,6 +6,13 @@ const PAYMENT_PLANS = {
         deliveryMode: 'offline',
         partialAmount: 10000
     },
+    gryffindor2: {
+        id: 'gryffindor2',
+        title: 'Gryffindor 2.0',
+        amount: 18000,
+        deliveryMode: 'offline',
+        partialAmount: 10000
+    },
     premium: {
         id: 'premium',
         title: 'Ravenclaw',
