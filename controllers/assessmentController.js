@@ -343,9 +343,9 @@ exports.getAssessmentSummary = async (req, res) => {
                     }
                     : null,
                 canPreview: false,
-                canEnter: status === 'open' || (status === 'ended' && Boolean(submission)),
+                canEnter: status === 'open' || status === 'ended',
                 canSubmit: status === 'open',
-                canReview: status === 'ended' && Boolean(submission)
+                canReview: status === 'ended'
             }
         });
     } catch (error) {
@@ -381,14 +381,7 @@ exports.getAssessmentExam = async (req, res) => {
             .select('_id')
             .lean();
 
-        if (status === 'ended' && !existingSubmission) {
-            return res.status(403).json({
-                success: false,
-                message: 'The assessment test submission portal has closed.'
-            });
-        }
-
-        const includeAnswers = status === 'ended' && Boolean(existingSubmission);
+        const includeAnswers = status === 'ended';
 
         res.status(200).json({
             success: true,
@@ -396,7 +389,7 @@ exports.getAssessmentExam = async (req, res) => {
                 ...buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode: 'exam' }),
                 hasSubmitted: Boolean(existingSubmission),
                 canSubmit: status === 'open',
-                canReview: status === 'ended' && Boolean(existingSubmission)
+                canReview: status === 'ended'
             }
         });
     } catch (error) {
