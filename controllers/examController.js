@@ -16,6 +16,7 @@ const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 const LIVE_EXAM_SOURCE = 'liveExam';
 const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
 const LIVE_EXAM_CACHE_GRACE_MS = Number(process.env.LIVE_EXAM_CACHE_GRACE_MS) || 10 * 60 * 1000;
+const LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS = Number(process.env.LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS) || 30 * 1000;
 const liveExamCache = new Map();
 const QUIZ_SUBJECT_WEIGHTS = [
     { subject: 'English', weight: 45 },
@@ -85,6 +86,16 @@ function areLiveExamResultsAvailable(exam, now = new Date()) {
 
     const endTime = exam?.endTime ? new Date(exam.endTime) : null;
     return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now > endTime);
+}
+
+function isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, now = new Date()) {
+    return (
+        submissionReason === 'timer_expired'
+        && endTime
+        && !Number.isNaN(endTime.getTime())
+        && now > endTime
+        && now.getTime() - endTime.getTime() <= LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS
+    );
 }
 
 function calculateDurationMinutes(startTime, endTime) {
@@ -1576,7 +1587,7 @@ exports.submitExam = async (req, res) => {
                 });
             }
 
-            if (currentTime > endTime) {
+            if (currentTime > endTime && !isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, currentTime)) {
                 return res.status(403).json({
                     success: false,
                     message: 'The submission portal has closed! You missed the official live exam deadline.'
@@ -1624,5 +1635,6 @@ exports._private = {
     areLiveExamResultsAvailable,
     buildPendingLiveSubmissionResponse,
     buildStudentSubmissionResponse,
+    isTimerExpiredSubmissionInsideGrace,
     serializeExamSummary
 };

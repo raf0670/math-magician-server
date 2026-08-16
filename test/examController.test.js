@@ -88,3 +88,25 @@ test('live exam summary hides score before end time and reveals it after', () =>
     assert.equal(Object.hasOwn(pendingSummary.submission, 'score'), false);
     assert.equal(endedSummary.submission.score, 1);
 });
+
+test('timer-expired live exam submissions are accepted inside the technical grace window', () => {
+    const endTime = new Date('2026-08-16T16:30:00.000Z');
+
+    assert.equal(
+        _private.isTimerExpiredSubmissionInsideGrace('timer_expired', endTime, new Date('2026-08-16T16:30:30.000Z')),
+        true
+    );
+});
+
+test('manual or too-late live exam submissions are outside the technical grace window', () => {
+    const endTime = new Date('2026-08-16T16:30:00.000Z');
+
+    assert.equal(
+        _private.isTimerExpiredSubmissionInsideGrace('manual', endTime, new Date('2026-08-16T16:30:10.000Z')),
+        false
+    );
+    assert.equal(
+        _private.isTimerExpiredSubmissionInsideGrace('timer_expired', endTime, new Date('2026-08-16T16:30:31.000Z')),
+        false
+    );
+});

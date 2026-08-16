@@ -10,7 +10,7 @@ const ASSESSMENT_START_TIME = new Date('2026-08-16T15:00:00.000Z');
 const ASSESSMENT_END_TIME = new Date('2026-08-16T16:30:00.000Z');
 const ASSESSMENT_DURATION_MINUTES = 90;
 const ASSESSMENT_NEGATIVE_MARKS = 0.25;
-const ASSESSMENT_ALLOW_LATE_SUBMISSIONS = true;
+const ASSESSMENT_TIMER_SUBMISSION_GRACE_MS = 30 * 1000;
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
 
@@ -46,6 +46,14 @@ function getAssessmentStatus(now = new Date()) {
     if (now < ASSESSMENT_START_TIME) return 'upcoming';
     if (now <= ASSESSMENT_END_TIME) return 'open';
     return 'ended';
+}
+
+function isTimerExpiredSubmissionInsideGrace(submissionReason, now = new Date()) {
+    return (
+        submissionReason === 'timer_expired'
+        && now > ASSESSMENT_END_TIME
+        && now.getTime() - ASSESSMENT_END_TIME.getTime() <= ASSESSMENT_TIMER_SUBMISSION_GRACE_MS
+    );
 }
 
 function getIdString(value) {
@@ -335,10 +343,9 @@ exports.getAssessmentSummary = async (req, res) => {
                     }
                     : null,
                 canPreview: false,
-                canEnter: status === 'open' || status === 'ended',
-                canSubmit: status === 'open' || (status === 'ended' && ASSESSMENT_ALLOW_LATE_SUBMISSIONS),
-                canReview: status === 'ended' && Boolean(submission),
-                allowLateSubmissions: ASSESSMENT_ALLOW_LATE_SUBMISSIONS
+                canEnter: status === 'open' || (status === 'ended' && Boolean(submission)),
+                canSubmit: status === 'open',
+                canReview: status === 'ended' && Boolean(submission)
             }
         });
     } catch (error) {
@@ -373,6 +380,14 @@ exports.getAssessmentExam = async (req, res) => {
         })
             .select('_id')
             .lean();
+
+        if (status === 'ended' && !existingSubmission) {
+            return res.status(403).json({
+                success: false,
+                message: 'The assessment test submission portal has closed.'
+            });
+        }
+
         const includeAnswers = status === 'ended' && Boolean(existingSubmission);
 
         res.status(200).json({
@@ -380,9 +395,8 @@ exports.getAssessmentExam = async (req, res) => {
             data: {
                 ...buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode: 'exam' }),
                 hasSubmitted: Boolean(existingSubmission),
-                canSubmit: status === 'open' || (status === 'ended' && ASSESSMENT_ALLOW_LATE_SUBMISSIONS),
-                canReview: status === 'ended' && Boolean(existingSubmission),
-                allowLateSubmissions: ASSESSMENT_ALLOW_LATE_SUBMISSIONS
+                canSubmit: status === 'open',
+                canReview: status === 'ended' && Boolean(existingSubmission)
             }
         });
     } catch (error) {
@@ -422,13 +436,6 @@ exports.submitAssessmentExam = async (req, res) => {
             });
         }
 
-        if (status === 'ended' && !ASSESSMENT_ALLOW_LATE_SUBMISSIONS) {
-            return res.status(403).json({
-                success: false,
-                message: 'The assessment test submission portal has closed.'
-            });
-        }
-
         const normalizedExam = buildAssessmentExamPayload(exam, questionSet, { includeAnswers: true });
         const existingSubmission = await Submission.findOne({
             student: studentId,
@@ -438,6 +445,13 @@ exports.submitAssessmentExam = async (req, res) => {
         if (existingSubmission) {
             const rankInfo = await getRankInfoByStudentId(studentId);
             return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true, rankInfo }));
+        }
+
+        if (status === 'ended' && !isTimerExpiredSubmissionInsideGrace(submissionReason, now)) {
+            return res.status(403).json({
+                success: false,
+                message: 'The assessment test submission portal has closed.'
+            });
         }
 
         const graded = gradeAnswers(normalizedExam, answers);
