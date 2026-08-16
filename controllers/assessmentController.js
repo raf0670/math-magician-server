@@ -10,6 +10,7 @@ const ASSESSMENT_START_TIME = new Date('2026-08-16T15:00:00.000Z');
 const ASSESSMENT_END_TIME = new Date('2026-08-16T16:30:00.000Z');
 const ASSESSMENT_DURATION_MINUTES = 90;
 const ASSESSMENT_NEGATIVE_MARKS = 0.25;
+const ASSESSMENT_ALLOW_LATE_SUBMISSIONS = true;
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
 
@@ -291,16 +292,17 @@ function buildSubmissionResponse(submission, exam, options = {}) {
     };
 }
 
-async function getAssessmentContext() {
+async function getAssessmentContext(now = new Date()) {
     const questionSet = await loadAssessmentQuestionSet();
     const exam = await syncAssessmentExamShell(questionSet);
 
-    return { exam, questionSet, status: getAssessmentStatus() };
+    return { exam, questionSet, status: getAssessmentStatus(now) };
 }
 
 exports.getAssessmentSummary = async (req, res) => {
     try {
-        const { exam, questionSet, status } = await getAssessmentContext();
+        const now = new Date();
+        const { exam, questionSet, status } = await getAssessmentContext(now);
         const submission = await Submission.findOne({
             student: req.user.id,
             exam: exam._id
@@ -334,8 +336,9 @@ exports.getAssessmentSummary = async (req, res) => {
                     : null,
                 canPreview: false,
                 canEnter: status === 'open' || status === 'ended',
-                canSubmit: status === 'open',
-                canReview: status === 'ended'
+                canSubmit: status === 'open' || (status === 'ended' && ASSESSMENT_ALLOW_LATE_SUBMISSIONS),
+                canReview: status === 'ended' && Boolean(submission),
+                allowLateSubmissions: ASSESSMENT_ALLOW_LATE_SUBMISSIONS
             }
         });
     } catch (error) {
@@ -346,7 +349,8 @@ exports.getAssessmentSummary = async (req, res) => {
 
 exports.getAssessmentExam = async (req, res) => {
     try {
-        const { exam, questionSet, status } = await getAssessmentContext();
+        const now = new Date();
+        const { exam, questionSet, status } = await getAssessmentContext(now);
 
         if (!questionSet.validQuestions.length) {
             return res.status(404).json({
@@ -363,11 +367,23 @@ exports.getAssessmentExam = async (req, res) => {
             });
         }
 
-        const includeAnswers = status === 'ended';
+        const existingSubmission = await Submission.findOne({
+            student: req.user.id,
+            exam: exam._id
+        })
+            .select('_id')
+            .lean();
+        const includeAnswers = status === 'ended' && Boolean(existingSubmission);
 
         res.status(200).json({
             success: true,
-            data: buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode: 'exam' })
+            data: {
+                ...buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode: 'exam' }),
+                hasSubmitted: Boolean(existingSubmission),
+                canSubmit: status === 'open' || (status === 'ended' && ASSESSMENT_ALLOW_LATE_SUBMISSIONS),
+                canReview: status === 'ended' && Boolean(existingSubmission),
+                allowLateSubmissions: ASSESSMENT_ALLOW_LATE_SUBMISSIONS
+            }
         });
     } catch (error) {
         console.error('[assessmentController:getAssessmentExam]', error);
@@ -389,7 +405,8 @@ exports.submitAssessmentExam = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Please submit answers as an array of selected option indexes.' });
         }
 
-        const { exam, questionSet, status } = await getAssessmentContext();
+        const now = new Date();
+        const { exam, questionSet, status } = await getAssessmentContext(now);
 
         if (!questionSet.validQuestions.length) {
             return res.status(400).json({
@@ -405,7 +422,7 @@ exports.submitAssessmentExam = async (req, res) => {
             });
         }
 
-        if (status === 'ended') {
+        if (status === 'ended' && !ASSESSMENT_ALLOW_LATE_SUBMISSIONS) {
             return res.status(403).json({
                 success: false,
                 message: 'The assessment test submission portal has closed.'
