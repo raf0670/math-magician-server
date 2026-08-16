@@ -6,7 +6,9 @@ const { getRankInfoByStudentId } = require('../services/rankService');
 
 const ASSESSMENT_EXAM_CODE = 'assessment-test-2026-08-16';
 const ASSESSMENT_TITLE = 'Assessment Test';
-const ASSESSMENT_DURATION_MINUTES = 0;
+const ASSESSMENT_START_TIME = new Date('2026-08-16T15:00:00.000Z');
+const ASSESSMENT_END_TIME = new Date('2026-08-16T16:30:00.000Z');
+const ASSESSMENT_DURATION_MINUTES = 90;
 const ASSESSMENT_NEGATIVE_MARKS = 0.25;
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
 const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
@@ -39,16 +41,14 @@ function normalizeSubmissionReason(value) {
     return SUBMISSION_REASONS.has(reason) ? reason : 'manual';
 }
 
-function getAssessmentStatus() {
-    return 'open';
+function getAssessmentStatus(now = new Date()) {
+    if (now < ASSESSMENT_START_TIME) return 'upcoming';
+    if (now <= ASSESSMENT_END_TIME) return 'open';
+    return 'ended';
 }
 
 function getIdString(value) {
     return value?._id?.toString?.() || value?.toString?.() || '';
-}
-
-function isAdmin(user) {
-    return user?.role === 'admin';
 }
 
 function getCorrectOptionIndex(question) {
@@ -181,11 +181,9 @@ async function syncAssessmentExamShell(questionSet) {
                 questionSource: 'AssessmentTest',
                 competitionCategory: 'daily',
                 allowRetakes: false,
-                isLiveExam: false
-            },
-            $unset: {
-                startTime: '',
-                endTime: ''
+                isLiveExam: true,
+                startTime: ASSESSMENT_START_TIME,
+                endTime: ASSESSMENT_END_TIME
             }
         },
         {
@@ -309,7 +307,6 @@ exports.getAssessmentSummary = async (req, res) => {
         })
             .select('score submittedAt')
             .lean();
-        const admin = isAdmin(req.user);
 
         res.status(200).json({
             success: true,
@@ -320,9 +317,9 @@ exports.getAssessmentSummary = async (req, res) => {
                 totalMarks: exam.totalMarks,
                 negativeMarksPerQuestion: ASSESSMENT_NEGATIVE_MARKS,
                 examType: exam.examType,
-                isLiveExam: false,
-                startTime: exam.startTime || null,
-                endTime: exam.endTime || null,
+                isLiveExam: true,
+                startTime: exam.startTime,
+                endTime: exam.endTime,
                 status,
                 questionCount: questionSet.validQuestions.length,
                 rawQuestionCount: questionSet.rawQuestionCount,
@@ -336,9 +333,9 @@ exports.getAssessmentSummary = async (req, res) => {
                     }
                     : null,
                 canPreview: false,
-                canEnter: true,
-                canSubmit: true,
-                canReview: false
+                canEnter: status === 'open' || status === 'ended',
+                canSubmit: status === 'open',
+                canReview: status === 'ended'
             }
         });
     } catch (error) {
@@ -349,7 +346,7 @@ exports.getAssessmentSummary = async (req, res) => {
 
 exports.getAssessmentExam = async (req, res) => {
     try {
-        const { exam, questionSet } = await getAssessmentContext();
+        const { exam, questionSet, status } = await getAssessmentContext();
 
         if (!questionSet.validQuestions.length) {
             return res.status(404).json({
@@ -359,9 +356,18 @@ exports.getAssessmentExam = async (req, res) => {
             });
         }
 
+        if (status === 'upcoming') {
+            return res.status(403).json({
+                success: false,
+                message: `This assessment test unlocks on ${ASSESSMENT_START_TIME.toLocaleString('en-US', { timeZone: 'Asia/Dhaka' })} Bangladesh time.`
+            });
+        }
+
+        const includeAnswers = status === 'ended';
+
         res.status(200).json({
             success: true,
-            data: buildAssessmentExamPayload(exam, questionSet, { includeAnswers: false, assessmentMode: 'exam' })
+            data: buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode: 'exam' })
         });
     } catch (error) {
         console.error('[assessmentController:getAssessmentExam]', error);
@@ -383,12 +389,26 @@ exports.submitAssessmentExam = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Please submit answers as an array of selected option indexes.' });
         }
 
-        const { exam, questionSet } = await getAssessmentContext();
+        const { exam, questionSet, status } = await getAssessmentContext();
 
         if (!questionSet.validQuestions.length) {
             return res.status(400).json({
                 success: false,
                 message: 'This assessment test has no valid questions to grade.'
+            });
+        }
+
+        if (status === 'upcoming') {
+            return res.status(403).json({
+                success: false,
+                message: 'This assessment test has not started yet.'
+            });
+        }
+
+        if (status === 'ended') {
+            return res.status(403).json({
+                success: false,
+                message: 'The assessment test submission portal has closed.'
             });
         }
 
