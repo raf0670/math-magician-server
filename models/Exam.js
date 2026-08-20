@@ -22,6 +22,32 @@ const ExamSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    passingMarks: {
+        type: Number,
+        validate: [
+            {
+                validator(value) {
+                    return value === undefined || value === null || Number.isInteger(value);
+                },
+                message: 'Passing marks must be a whole number'
+            },
+            {
+                validator(value) {
+                    return value === undefined || value === null || value >= 0;
+                },
+                message: 'Passing marks cannot be negative'
+            },
+            {
+                validator(value) {
+                    if (value === undefined || value === null) return true;
+                    const update = this.getUpdate?.() || {};
+                    const totalMarks = this.totalMarks ?? this.get?.('totalMarks') ?? update.totalMarks ?? update.$set?.totalMarks;
+                    return value <= Number(totalMarks);
+                },
+                message: 'Passing marks cannot exceed total marks'
+            }
+        ]
+    },
     negativeMarksPerQuestion: {
         type: Number,
         default: 0.25 // Defaults to 0.25 if not explicitly provided by admin

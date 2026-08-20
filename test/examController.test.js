@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { _private } = require('../controllers/examController');
 
-function buildLiveExam(endTime) {
+function buildLiveExam(endTime, overrides = {}) {
     return {
         _id: 'exam-1',
         title: 'Daily Live Exam',
@@ -20,17 +20,19 @@ function buildLiveExam(endTime) {
                 correctAnswer: '4',
                 explanation: 'Basic addition.'
             }
-        ]
+        ],
+        ...overrides
     };
 }
 
-function buildSubmission() {
+function buildSubmission(overrides = {}) {
     return {
         _id: 'submission-1',
         answers: [1],
         score: 1,
         submittedAt: new Date('2026-08-16T15:10:00.000Z'),
-        submissionReason: 'manual'
+        submissionReason: 'manual',
+        ...overrides
     };
 }
 
@@ -45,6 +47,8 @@ test('pending official live exam submission response hides score, review, and an
     assert.equal(Object.hasOwn(response, 'score'), false);
     assert.equal(Object.hasOwn(response, 'review'), false);
     assert.equal(Object.hasOwn(response, 'answers'), false);
+    assert.equal(Object.hasOwn(response, 'passingMarks'), false);
+    assert.equal(Object.hasOwn(response, 'isPassed'), false);
 });
 
 test('duplicate pending official live exam submission response is still receipt-only', () => {
@@ -56,6 +60,8 @@ test('duplicate pending official live exam submission response is still receipt-
     assert.equal(Object.hasOwn(response, 'score'), false);
     assert.equal(Object.hasOwn(response, 'review'), false);
     assert.equal(Object.hasOwn(response, 'answers'), false);
+    assert.equal(Object.hasOwn(response, 'passingMarks'), false);
+    assert.equal(Object.hasOwn(response, 'isPassed'), false);
 });
 
 test('ended official live exam submission response includes full scorecard data', () => {
@@ -67,6 +73,40 @@ test('ended official live exam submission response includes full scorecard data'
     assert.deepEqual(response.answers, [1]);
     assert.equal(response.review.length, 1);
     assert.equal(response.review[0].correctAnswer, '4');
+});
+
+test('ended official live exam submission response includes default pass status', () => {
+    const exam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        totalMarks: 10
+    });
+    const response = _private.buildStudentSubmissionResponse(buildSubmission({ score: 4 }), exam);
+
+    assert.equal(response.passingMarks, 4);
+    assert.equal(response.isPassed, true);
+});
+
+test('explicit passing marks override the live exam default', () => {
+    const exam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        totalMarks: 10,
+        passingMarks: 7
+    });
+
+    const failedResponse = _private.buildStudentSubmissionResponse(buildSubmission({ score: 6 }), exam);
+    const passedResponse = _private.buildStudentSubmissionResponse(buildSubmission({ score: 7 }), exam);
+
+    assert.equal(failedResponse.passingMarks, 7);
+    assert.equal(failedResponse.isPassed, false);
+    assert.equal(passedResponse.passingMarks, 7);
+    assert.equal(passedResponse.isPassed, true);
+});
+
+test('older live exams without passing marks use floor of forty percent', () => {
+    const exam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        totalMarks: 19
+    });
+    delete exam.passingMarks;
+
+    assert.equal(_private.getEffectivePassingMarks(exam), 7);
 });
 
 test('live exam summary hides score before end time and reveals it after', () => {
@@ -86,7 +126,11 @@ test('live exam summary hides score before end time and reveals it after', () =>
     assert.equal(pendingSummary.hasSubmitted, true);
     assert.equal(pendingSummary.submission.submittedAt, submission.submittedAt);
     assert.equal(Object.hasOwn(pendingSummary.submission, 'score'), false);
+    assert.equal(Object.hasOwn(pendingSummary.submission, 'isPassed'), false);
+    assert.equal(Object.hasOwn(pendingSummary.submission, 'passingMarks'), false);
     assert.equal(endedSummary.submission.score, 1);
+    assert.equal(endedSummary.submission.isPassed, true);
+    assert.equal(endedSummary.submission.passingMarks, 0);
 });
 
 test('timer-expired live exam submissions are accepted inside the technical grace window', () => {

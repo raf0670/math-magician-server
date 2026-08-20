@@ -52,3 +52,21 @@ test('untimed generated practice exams still do not count for rank points', () =
     assert.equal(shouldCountExam(exam), false);
     assert.equal(getRankPointsForSubmission(submission), null);
 });
+
+test('failed live exam submissions still contribute their achieved score to rank points', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'daily',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 10,
+        passingMarks: 8
+    };
+    const submission = {
+        exam,
+        score: 2
+    };
+
+    assert.equal(shouldCountExam(exam, new Date('2026-08-16T16:30:01.000Z')), true);
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 2);
+});

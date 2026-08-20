@@ -108,6 +108,30 @@ function getEffectiveNegativeMarksPerQuestion(value) {
     return Number.isFinite(penalty) && penalty > 0 ? penalty : 0.25;
 }
 
+function getDefaultPassingMarks(totalMarks) {
+    const marks = Number(totalMarks);
+    return Number.isFinite(marks) && marks > 0 ? Math.floor(marks * 0.4) : 0;
+}
+
+function getEffectivePassingMarks(exam) {
+    const totalMarks = Number(exam?.totalMarks || 0);
+    const passingMarks = Number(exam?.passingMarks);
+
+    if (Number.isInteger(passingMarks) && passingMarks >= 0 && passingMarks <= totalMarks) {
+        return passingMarks;
+    }
+
+    return getDefaultPassingMarks(totalMarks);
+}
+
+function buildLiveExamResultStatus(submission, exam) {
+    const passingMarks = getEffectivePassingMarks(exam);
+    return {
+        passingMarks,
+        isPassed: Number(submission?.score || 0) >= passingMarks
+    };
+}
+
 function normalizeSubmissionReason(value) {
     const reason = clean(value);
     return SUBMISSION_REASONS.has(reason) ? reason : 'manual';
@@ -647,6 +671,7 @@ function normalizeExamForClient(exam) {
         ...plainExam,
         competitionCategory: normalizeCompetitionCategory(plainExam.competitionCategory),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
+        passingMarks: getEffectivePassingMarks(plainExam),
         questions: (plainExam.questions || [])
             .map(normalizeQuestionForClient)
             .filter(Boolean)
@@ -679,6 +704,7 @@ async function normalizePopulatedExam(exam, options = {}) {
         ...plainExam,
         competitionCategory: normalizeCompetitionCategory(plainExam.competitionCategory),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
+        passingMarks: getEffectivePassingMarks(plainExam),
         questions: includeAnswers ? normalizedQuestions : normalizedQuestions.map(redactQuestionAnswers)
     };
 }
@@ -787,6 +813,9 @@ function gradeAnswers(normalizedExam, answers) {
 
 function buildSubmissionResponse(submission, normalizedExam, options = {}) {
     const graded = gradeAnswers(normalizedExam, submission.answers || []);
+    const liveExamStatus = isOfficialLiveExam(normalizedExam)
+        ? buildLiveExamResultStatus(submission, normalizedExam)
+        : {};
 
     return {
         success: true,
@@ -800,7 +829,8 @@ function buildSubmissionResponse(submission, normalizedExam, options = {}) {
         answers: submission.answers || [],
         submissionReason: normalizeSubmissionReason(submission.submissionReason),
         submissionId: submission._id,
-        alreadySubmitted: Boolean(options.alreadySubmitted)
+        alreadySubmitted: Boolean(options.alreadySubmitted),
+        ...liveExamStatus
     };
 }
 
@@ -868,6 +898,26 @@ function normalizeLabeledOption(option, index) {
     return labelPattern.test(text) ? text : `${label}) ${text}`;
 }
 
+function parsePassingMarks(value, totalMarks, errors) {
+    const rawValue = value?.toString?.().trim?.();
+    if (value === undefined || value === null || rawValue === '') {
+        return getDefaultPassingMarks(totalMarks);
+    }
+
+    const passingMarks = Number(rawValue);
+    if (!Number.isInteger(passingMarks)) {
+        errors.push('Passing marks must be a whole number.');
+        return getDefaultPassingMarks(totalMarks);
+    }
+
+    if (passingMarks < 0 || passingMarks > totalMarks) {
+        errors.push(`Passing marks must be between 0 and ${totalMarks}.`);
+        return getDefaultPassingMarks(totalMarks);
+    }
+
+    return passingMarks;
+}
+
 function parseLiveExamPayload(body = {}, userId) {
     const title = clean(body.title);
     const competitionCategory = normalizeCompetitionCategory(body.competitionCategory);
@@ -931,6 +981,8 @@ function parseLiveExamPayload(body = {}, userId) {
             createdBy: userId
         };
     });
+    const totalMarks = normalizedQuestions.length;
+    const passingMarks = parsePassingMarks(body.passingMarks, totalMarks, errors);
 
     return {
         payload: {
@@ -941,6 +993,7 @@ function parseLiveExamPayload(body = {}, userId) {
             duration: Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())
                 ? 1
                 : calculateDurationMinutes(startTime, endTime),
+            passingMarks,
             questions: normalizedQuestions
         },
         errors
@@ -964,6 +1017,7 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
         questionCount,
         missingQuestionCount: Math.max(0, questionIds.length - questionCount),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
+        passingMarks: getEffectivePassingMarks(plainExam),
         hasSubmitted: Boolean(submission),
         resultsAvailable,
         resultsAvailableAt: plainExam.endTime || null,
@@ -971,7 +1025,10 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
             ? {
                 submittedAt: submission.submittedAt,
                 resultsAvailable,
-                ...(resultsAvailable ? { score: submission.score } : {})
+                ...(resultsAvailable ? {
+                    score: submission.score,
+                    ...buildLiveExamResultStatus(submission, plainExam)
+                } : {})
             }
             : null
     };
@@ -1298,7 +1355,7 @@ exports.getLiveExams = async (req, res) => {
     try {
         const exams = await Exam.find(buildOfficialLiveExamFilter())
             .sort({ startTime: -1 })
-            .select('title duration totalMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
+            .select('title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
             .lean();
 
         const examIds = exams.map((exam) => exam._id);
@@ -1368,6 +1425,7 @@ exports.createLiveExam = async (req, res) => {
             questions: questions.map((question) => question._id),
             duration: payload.duration,
             totalMarks: questions.length,
+            passingMarks: payload.passingMarks,
             negativeMarksPerQuestion: 0.25,
             examType: 'official',
             competitionCategory: payload.competitionCategory,
@@ -1422,6 +1480,7 @@ exports.updateLiveExam = async (req, res) => {
                 questions: questions.map((question) => question._id),
                 duration: payload.duration,
                 totalMarks: questions.length,
+                passingMarks: payload.passingMarks,
                 negativeMarksPerQuestion: 0.25,
                 examType: 'official',
                 competitionCategory: payload.competitionCategory,
@@ -1634,7 +1693,10 @@ exports.submitExam = async (req, res) => {
 exports._private = {
     areLiveExamResultsAvailable,
     buildPendingLiveSubmissionResponse,
+    buildLiveExamResultStatus,
     buildStudentSubmissionResponse,
+    getDefaultPassingMarks,
+    getEffectivePassingMarks,
     isTimerExpiredSubmissionInsideGrace,
     serializeExamSummary
 };
