@@ -54,7 +54,7 @@ const ExamSchema = new mongoose.Schema({
     },
     examType: {
         type: String,
-        enum: ['official', 'assessment', 'generatedPractice', 'generatedQuiz'],
+        enum: ['official', 'assessment', 'assignment', 'generatedPractice', 'generatedQuiz'],
         default: 'official',
         index: true
     },
@@ -90,6 +90,10 @@ const ExamSchema = new mongoose.Schema({
     },
     endTime: {
         type: Date // The exact moment submissions freeze
+    },
+    assignmentDate: {
+        type: String,
+        trim: true
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,

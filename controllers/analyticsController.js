@@ -39,15 +39,17 @@ function getEffectiveScore(submission) {
     return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
 }
 
-function isPendingOfficialLiveExam(exam, now = new Date()) {
-    if (!exam?.isLiveExam || (exam.examType && exam.examType !== 'official')) return false;
+function isPendingDelayedResultExam(exam, now = new Date()) {
+    const isOfficialLiveExam = exam?.isLiveExam && (!exam.examType || exam.examType === 'official');
+    const isAssignment = exam?.isLiveExam && exam.examType === 'assignment';
+    if (!isOfficialLiveExam && !isAssignment) return false;
 
     const endTime = exam.endTime ? new Date(exam.endTime) : null;
     return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now <= endTime);
 }
 
 function isSubmissionResultAvailable(submission, now = new Date()) {
-    return !isPendingOfficialLiveExam(submission?.exam, now);
+    return !isPendingDelayedResultExam(submission?.exam, now);
 }
 
 function getStudentId(value) {
@@ -323,7 +325,7 @@ exports.getExamLeaderboard = async (req, res) => {
         const exam = await Exam.findById(examId)
             .select('examType isLiveExam endTime')
             .lean();
-        if (exam && isPendingOfficialLiveExam(exam)) {
+        if (exam && isPendingDelayedResultExam(exam)) {
             return res.status(200).json({
                 success: true,
                 count: 0,
@@ -460,6 +462,7 @@ exports.updateSubmissionModeration = async (req, res) => {
 exports._private = {
     buildCompetitionExamFilter,
     buildOfficialExamFilter,
-    isPendingOfficialLiveExam,
+    isPendingOfficialLiveExam: isPendingDelayedResultExam,
+    isPendingDelayedResultExam,
     isSubmissionResultAvailable
 };

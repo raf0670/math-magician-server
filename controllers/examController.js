@@ -14,6 +14,9 @@ const GROUPED_TOPIC_RULES = [
 ];
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 const LIVE_EXAM_SOURCE = 'liveExam';
+const ASSIGNMENT_SOURCE = 'assignment';
+const ASSIGNMENT_EXAM_TYPE = 'assignment';
+const BANGLADESH_UTC_OFFSET_MINUTES = 6 * 60;
 const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
 const LIVE_EXAM_CACHE_GRACE_MS = Number(process.env.LIVE_EXAM_CACHE_GRACE_MS) || 10 * 60 * 1000;
 const LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS = Number(process.env.LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS) || 30 * 1000;
@@ -55,8 +58,15 @@ function buildOfficialLiveExamFilter() {
     };
 }
 
+function buildAssignmentExamFilter() {
+    return {
+        isLiveExam: true,
+        examType: ASSIGNMENT_EXAM_TYPE
+    };
+}
+
 function buildQuestionSelect(includeAnswers = false) {
-    const baseFields = 'questionNo question_no set_number question questionText options subject difficulty chapter topic subTopic explanation source createdBy';
+    const baseFields = 'questionNo question_no set_number instruction question questionText options subject difficulty chapter topic subTopic explanation source createdBy';
     return includeAnswers ? `${baseFields} correctOptionIndex correctAnswer correct_answer` : baseFields;
 }
 
@@ -81,8 +91,16 @@ function isOfficialLiveExam(exam) {
     return Boolean(exam?.isLiveExam && (!exam.examType || exam.examType === 'official'));
 }
 
+function isAssignmentExam(exam) {
+    return Boolean(exam?.isLiveExam && exam.examType === ASSIGNMENT_EXAM_TYPE);
+}
+
+function isDelayedResultExam(exam) {
+    return isOfficialLiveExam(exam) || isAssignmentExam(exam);
+}
+
 function areLiveExamResultsAvailable(exam, now = new Date()) {
-    if (!isOfficialLiveExam(exam)) return true;
+    if (!isDelayedResultExam(exam)) return true;
 
     const endTime = exam?.endTime ? new Date(exam.endTime) : null;
     return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now > endTime);
@@ -171,7 +189,7 @@ function buildRecognizedSubjectFilter() {
 
 function buildPracticeQuestionSourceFilter() {
     return {
-        source: { $ne: LIVE_EXAM_SOURCE }
+        source: { $nin: [LIVE_EXAM_SOURCE, ASSIGNMENT_SOURCE] }
     };
 }
 
@@ -835,11 +853,12 @@ function buildSubmissionResponse(submission, normalizedExam, options = {}) {
 }
 
 function buildPendingLiveSubmissionResponse(submission, normalizedExam, options = {}) {
+    const noun = isAssignmentExam(normalizedExam) ? 'assignment' : 'live exam';
     return {
         success: true,
         message: options.alreadySubmitted
-            ? 'Your answer sheet was already submitted. Results will unlock after the live exam deadline.'
-            : 'Your answer sheet has been submitted. Results will unlock after the live exam deadline.',
+            ? `Your answer sheet was already submitted. Results will unlock after the ${noun} deadline.`
+            : `Your answer sheet has been submitted. Results will unlock after the ${noun} deadline.`,
         submitted: true,
         submittedAt: submission.submittedAt,
         submissionId: submission._id,
@@ -851,7 +870,7 @@ function buildPendingLiveSubmissionResponse(submission, normalizedExam, options 
 }
 
 function buildStudentSubmissionResponse(submission, normalizedExam, options = {}) {
-    if (!isOfficialLiveExam(normalizedExam)) {
+    if (!isDelayedResultExam(normalizedExam)) {
         return buildSubmissionResponse(submission, normalizedExam, options);
     }
 
@@ -896,6 +915,49 @@ function normalizeLabeledOption(option, index) {
     const label = OPTION_LABELS[index];
     const labelPattern = new RegExp(`^${label}\\s*[).:-]\\s*`, 'i');
     return labelPattern.test(text) ? text : `${label}) ${text}`;
+}
+
+function parseStrictJsonArray(value, errors, fieldName = 'questions') {
+    if (Array.isArray(value)) return value;
+
+    if (typeof value !== 'string') {
+        errors.push(`${fieldName} must be a JSON array.`);
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) {
+            errors.push(`${fieldName} must be a JSON array.`);
+            return [];
+        }
+
+        return parsed;
+    } catch {
+        errors.push(`${fieldName} must be valid strict JSON.`);
+        return [];
+    }
+}
+
+function getBangladeshFullDayWindow(assignmentDate) {
+    const rawDate = clean(assignmentDate);
+    const match = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) {
+        return { startTime: null, endTime: null, assignmentDate: rawDate };
+    }
+
+    const year = Number(match[1]);
+    const monthIndex = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const utcStartMs = Date.UTC(year, monthIndex, day, 0, 0, 0, 0) - BANGLADESH_UTC_OFFSET_MINUTES * 60000;
+    const utcEndMs = Date.UTC(year, monthIndex, day, 23, 59, 59, 999) - BANGLADESH_UTC_OFFSET_MINUTES * 60000;
+
+    return {
+        startTime: new Date(utcStartMs),
+        endTime: new Date(utcEndMs),
+        assignmentDate: rawDate
+    };
 }
 
 function parsePassingMarks(value, totalMarks, errors) {
@@ -1031,6 +1093,88 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
                 } : {})
             }
             : null
+    };
+}
+
+function parseAssignmentPayload(body = {}, userId) {
+    const title = clean(body.title);
+    const errors = [];
+    const { startTime, endTime, assignmentDate } = getBangladeshFullDayWindow(body.assignmentDate);
+    const questions = parseStrictJsonArray(body.questions, errors);
+
+    if (!title) errors.push('Assignment title is required.');
+    if (!assignmentDate || !startTime || !endTime || Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) {
+        errors.push('Please add a valid assignment date in YYYY-MM-DD format.');
+    }
+    if (!questions.length) errors.push('Please add at least one assignment question.');
+
+    const normalizedQuestions = questions.map((item, questionIndex) => {
+        const rawOptions = Array.isArray(item.options) ? item.options.map(clean) : [];
+        const options = rawOptions.map(normalizeLabeledOption);
+        const subject = clean(item.subject) || 'General';
+        const topic = clean(item.topic || item.chapter);
+        const chapter = clean(item.chapter || item.topic);
+        const subTopic = clean(item.subTopic);
+        const difficulty = clean(item.difficulty) || 'Assignment';
+        const questionText = clean(item.question || item.questionText);
+        const instruction = clean(item.instruction);
+        const explanation = clean(item.explanation);
+        const correctAnswer = clean(item.correct_answer || item.correctAnswer);
+        const suppliedQuestionNo = Number(item.question_no || item.questionNo);
+        const questionNo = Number.isInteger(suppliedQuestionNo) && suppliedQuestionNo > 0 ? suppliedQuestionNo : questionIndex + 1;
+
+        if (!questionText) errors.push(`Question ${questionIndex + 1}: question text is required.`);
+        if (!Array.isArray(item.options) || rawOptions.length < 2 || rawOptions.length > 5 || rawOptions.some((option) => !option)) {
+            errors.push(`Question ${questionIndex + 1}: 2 to 5 non-empty options are required.`);
+        }
+        if (!correctAnswer) errors.push(`Question ${questionIndex + 1}: correct_answer is required.`);
+
+        const normalizedCorrectAnswer = normalizeOptionText(correctAnswer);
+        const strippedCorrectAnswer = stripOptionLabel(correctAnswer);
+        const labelMatch = normalizedCorrectAnswer.match(/^([a-e])(?:\s*[\).:-])?$/);
+        const labelIndex = labelMatch ? OPTION_LABELS.indexOf(labelMatch[1].toUpperCase()) : -1;
+        const correctOptionIndex = labelIndex >= 0 && labelIndex < options.length
+            ? labelIndex
+            : options.findIndex((option) => (
+                normalizeOptionText(option) === normalizedCorrectAnswer
+                || stripOptionLabel(option) === strippedCorrectAnswer
+            ));
+
+        if (correctAnswer && correctOptionIndex < 0) {
+            errors.push(`Question ${questionIndex + 1}: correct_answer must match one of the options.`);
+        }
+
+        return {
+            questionNo,
+            question_no: questionNo,
+            instruction,
+            question: questionText,
+            questionText,
+            options,
+            correctOptionIndex: Math.max(correctOptionIndex, 0),
+            correctAnswer: correctOptionIndex >= 0 ? options[correctOptionIndex] : correctAnswer,
+            correct_answer: correctOptionIndex >= 0 ? options[correctOptionIndex] : correctAnswer,
+            subject,
+            difficulty,
+            chapter,
+            topic,
+            subTopic,
+            explanation,
+            source: ASSIGNMENT_SOURCE,
+            createdBy: userId
+        };
+    });
+
+    return {
+        payload: {
+            title,
+            assignmentDate,
+            startTime,
+            endTime,
+            duration: startTime && endTime ? calculateDurationMinutes(startTime, endTime) : 1,
+            questions: normalizedQuestions
+        },
+        errors
     };
 }
 
@@ -1461,7 +1605,7 @@ exports.updateLiveExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
         }
 
-        const existingExam = await Exam.findOne({ _id: req.params.id, isLiveExam: true });
+        const existingExam = await Exam.findOne({ _id: req.params.id, ...buildOfficialLiveExamFilter() });
         if (!existingExam) {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
         }
@@ -1506,6 +1650,173 @@ exports.updateLiveExam = async (req, res) => {
         res.status(200).json({ success: true, data: await normalizePopulatedExam(updatedExam) });
     } catch (error) {
         logExamError('updateLiveExam', error);
+        const status = error.name === 'ValidationError' ? 400 : 500;
+        res.status(status).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    List assignments for students
+// @route   GET /api/exams/assignments
+// @access  Private
+exports.getAssignments = async (req, res) => {
+    try {
+        const exams = await Exam.find(buildAssignmentExamFilter())
+            .sort({ startTime: -1 })
+            .select('title duration totalMarks negativeMarksPerQuestion examType assignmentDate allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
+            .lean();
+
+        const examIds = exams.map((exam) => exam._id);
+        const submissions = await Submission.find({
+            student: req.user.id,
+            exam: { $in: examIds }
+        })
+            .select('exam score submittedAt answers')
+            .lean();
+        const submissionByExamId = new Map(submissions.map((submission) => [submission.exam.toString(), submission]));
+        const questionIds = [...new Set(exams.flatMap((exam) => (
+            (exam.questions || []).map(getIdString).filter(Boolean)
+        )))];
+        const existingQuestions = questionIds.length
+            ? await QuestionBank.find({ _id: { $in: questionIds } }).select('_id').lean()
+            : [];
+        const existingQuestionIdSet = new Set(existingQuestions.map((question) => question._id.toString()));
+        const data = exams.map((exam) => serializeExamSummary(exam, submissionByExamId, existingQuestionIdSet));
+
+        res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+        logExamError('getAssignments', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    List assignments with questions for admins
+// @route   GET /api/exams/assignments/admin
+// @access  Private/Admin
+exports.getAdminAssignments = async (req, res) => {
+    try {
+        const exams = await Exam.find(buildAssignmentExamFilter())
+            .sort({ startTime: -1 })
+            .populate({
+                path: 'questions',
+                select: buildQuestionSelect(true)
+            })
+            .populate('createdBy', 'name email');
+
+        const data = exams.map((exam) => ({
+            ...normalizeExamForClient(exam),
+            status: getLiveExamStatus(exam),
+            questionCount: exam.questions?.length || 0
+        }));
+
+        res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+        logExamError('getAdminAssignments', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Create a full-day assignment and its authored questions
+// @route   POST /api/exams/assignments/admin
+// @access  Private/Admin
+exports.createAssignment = async (req, res) => {
+    try {
+        const { payload, errors } = parseAssignmentPayload(req.body, req.user._id);
+
+        if (errors.length) {
+            return res.status(400).json({ success: false, message: errors[0], errors });
+        }
+
+        const questions = await QuestionBank.insertMany(payload.questions, { ordered: true });
+        const exam = await Exam.create({
+            title: payload.title,
+            questions: questions.map((question) => question._id),
+            duration: payload.duration,
+            totalMarks: questions.length,
+            passingMarks: 0,
+            negativeMarksPerQuestion: 0.25,
+            examType: ASSIGNMENT_EXAM_TYPE,
+            questionSource: 'QuestionBank',
+            competitionCategory: 'daily',
+            allowRetakes: false,
+            isLiveExam: true,
+            startTime: payload.startTime,
+            endTime: payload.endTime,
+            assignmentDate: payload.assignmentDate,
+            createdBy: req.user._id
+        });
+
+        const populated = await Exam.findById(exam._id)
+            .populate({
+                path: 'questions',
+                select: buildQuestionSelect(true)
+            })
+            .populate('createdBy', 'name email');
+
+        invalidateLiveExamCache(exam._id);
+        res.status(201).json({ success: true, data: await normalizePopulatedExam(populated) });
+    } catch (error) {
+        logExamError('createAssignment', error);
+        const status = error.name === 'ValidationError' ? 400 : 500;
+        res.status(status).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Update a full-day assignment and replace its authored questions
+// @route   PATCH /api/exams/assignments/admin/:id
+// @access  Private/Admin
+exports.updateAssignment = async (req, res) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(404).json({ success: false, message: 'Assignment was not found.' });
+        }
+
+        const existingExam = await Exam.findOne({ _id: req.params.id, ...buildAssignmentExamFilter() });
+        if (!existingExam) {
+            return res.status(404).json({ success: false, message: 'Assignment was not found.' });
+        }
+
+        const { payload, errors } = parseAssignmentPayload(req.body, req.user._id);
+        if (errors.length) {
+            return res.status(400).json({ success: false, message: errors[0], errors });
+        }
+
+        const oldQuestionIds = existingExam.questions || [];
+        const questions = await QuestionBank.insertMany(payload.questions, { ordered: true });
+        const updatedExam = await Exam.findByIdAndUpdate(
+            existingExam._id,
+            {
+                title: payload.title,
+                questions: questions.map((question) => question._id),
+                duration: payload.duration,
+                totalMarks: questions.length,
+                passingMarks: 0,
+                negativeMarksPerQuestion: 0.25,
+                examType: ASSIGNMENT_EXAM_TYPE,
+                questionSource: 'QuestionBank',
+                competitionCategory: 'daily',
+                allowRetakes: false,
+                isLiveExam: true,
+                startTime: payload.startTime,
+                endTime: payload.endTime,
+                assignmentDate: payload.assignmentDate
+            },
+            { new: true, runValidators: true }
+        )
+            .populate({
+                path: 'questions',
+                select: buildQuestionSelect(true)
+            })
+            .populate('createdBy', 'name email');
+
+        await QuestionBank.deleteMany({
+            _id: { $in: oldQuestionIds },
+            source: ASSIGNMENT_SOURCE
+        });
+
+        invalidateLiveExamCache(updatedExam._id);
+        res.status(200).json({ success: true, data: await normalizePopulatedExam(updatedExam) });
+    } catch (error) {
+        logExamError('updateAssignment', error);
         const status = error.name === 'ValidationError' ? 400 : 500;
         res.status(status).json({ success: false, message: error.message });
     }
@@ -1692,11 +2003,15 @@ exports.submitExam = async (req, res) => {
 
 exports._private = {
     areLiveExamResultsAvailable,
+    buildAssignmentExamFilter,
     buildPendingLiveSubmissionResponse,
+    buildPracticeQuestionSourceFilter,
     buildLiveExamResultStatus,
     buildStudentSubmissionResponse,
+    getBangladeshFullDayWindow,
     getDefaultPassingMarks,
     getEffectivePassingMarks,
     isTimerExpiredSubmissionInsideGrace,
+    parseAssignmentPayload,
     serializeExamSummary
 };

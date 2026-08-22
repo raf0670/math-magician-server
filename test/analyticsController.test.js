@@ -54,3 +54,17 @@ test('assessment submissions keep their existing analytics availability', () => 
 
     assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-16T15:30:00.000Z')), true);
 });
+
+test('assignment submissions are unavailable before the assignment deadline', () => {
+    const submission = {
+        exam: {
+            examType: 'assignment',
+            isLiveExam: true,
+            endTime: new Date('2026-08-24T17:59:59.999Z')
+        },
+        score: 2
+    };
+
+    assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-24T17:00:00.000Z')), false);
+    assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-24T18:00:00.000Z')), true);
+});

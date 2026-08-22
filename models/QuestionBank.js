@@ -7,6 +7,10 @@ const QuestionBankSchema = new mongoose.Schema({
     question_no: {
         type: Number
     },
+    instruction: {
+        type: String,
+        trim: true
+    },
     set_number: {
         type: Number,
         index: true
@@ -53,7 +57,7 @@ const QuestionBankSchema = new mongoose.Schema({
         type: String,
         required: [
             function requireChapterForReusableQuestions() {
-                return this.source !== 'liveExam';
+                return !['liveExam', 'assignment'].includes(this.source);
             },
             'Please add a chapter or topic name'
         ],

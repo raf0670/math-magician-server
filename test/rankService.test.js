@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getRankPointsForSubmission, shouldCountExam } = require('../services/rankService');
+const { getMissingAssignmentRankPoints, getRankPointsForSubmission, shouldCountExam } = require('../services/rankService');
 
 test('timed assessment exams count for rank points after the official start time', () => {
     const exam = {
@@ -69,4 +69,58 @@ test('failed live exam submissions still contribute their achieved score to rank
 
     assert.equal(shouldCountExam(exam, new Date('2026-08-16T16:30:01.000Z')), true);
     assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 2);
+});
+
+test('completed assignment submission gives two rank points after deadline', () => {
+    const exam = {
+        examType: 'assignment',
+        isLiveExam: true,
+        endTime: new Date('2026-08-24T17:59:59.999Z'),
+        totalMarks: 3
+    };
+    const submission = {
+        exam,
+        answers: [0, 1, 2],
+        score: 1
+    };
+
+    assert.equal(shouldCountExam(exam, new Date('2026-08-24T18:00:00.000Z')), true);
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-24T18:00:00.000Z')), 2);
+});
+
+test('unfinished assignment submission gives zero rank points', () => {
+    const exam = {
+        examType: 'assignment',
+        isLiveExam: true,
+        endTime: new Date('2026-08-24T17:59:59.999Z'),
+        totalMarks: 3
+    };
+    const submission = {
+        exam,
+        answers: [0, -1, 2],
+        score: 1
+    };
+
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-24T18:00:00.000Z')), 0);
+});
+
+test('disqualified assignment submission gives zero rank points', () => {
+    const exam = {
+        examType: 'assignment',
+        isLiveExam: true,
+        endTime: new Date('2026-08-24T17:59:59.999Z'),
+        totalMarks: 3
+    };
+    const submission = {
+        exam,
+        answers: [0, 1, 2],
+        score: 3,
+        isDisqualified: true
+    };
+
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-24T18:00:00.000Z')), 0);
+});
+
+test('missing assignment penalty is minus two rank points', () => {
+    assert.equal(getMissingAssignmentRankPoints(), -2);
 });

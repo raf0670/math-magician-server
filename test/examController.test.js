@@ -154,3 +154,90 @@ test('manual or too-late live exam submissions are outside the technical grace w
         false
     );
 });
+
+test('assignment date converts to a full Bangladesh calendar day in UTC', () => {
+    const window = _private.getBangladeshFullDayWindow('2026-08-24');
+
+    assert.equal(window.assignmentDate, '2026-08-24');
+    assert.equal(window.startTime.toISOString(), '2026-08-23T18:00:00.000Z');
+    assert.equal(window.endTime.toISOString(), '2026-08-24T17:59:59.999Z');
+});
+
+test('assignment payload accepts assessment-style strict JSON questions', () => {
+    const { payload, errors } = _private.parseAssignmentPayload({
+        title: 'Assignment 01',
+        assignmentDate: '2026-08-24',
+        questions: JSON.stringify([
+            {
+                subject: 'Maths',
+                question_no: 1,
+                instruction: 'Solve the math.',
+                question: '2 + 2 = ?',
+                options: ['A) 3', 'B) 4', 'C) 5', 'D) 6', 'E) None of these'],
+                correct_answer: 'B) 4',
+                explanation: '2 + 2 equals 4.'
+            }
+        ])
+    }, '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.questions.length, 1);
+    assert.equal(payload.questions[0].instruction, 'Solve the math.');
+    assert.equal(payload.questions[0].correctOptionIndex, 1);
+    assert.equal(payload.questions[0].source, 'assignment');
+});
+
+test('assignment summary hides score before deadline and reveals it after', () => {
+    const pendingAssignment = buildLiveExam(new Date('2099-01-01T00:00:00.000Z'), {
+        examType: 'assignment'
+    });
+    const endedAssignment = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        examType: 'assignment'
+    });
+    const submission = buildSubmission();
+
+    const pendingSummary = _private.serializeExamSummary(
+        pendingAssignment,
+        new Map([[pendingAssignment._id, submission]])
+    );
+    const endedSummary = _private.serializeExamSummary(
+        endedAssignment,
+        new Map([[endedAssignment._id, submission]])
+    );
+
+    assert.equal(pendingSummary.hasSubmitted, true);
+    assert.equal(pendingSummary.submission.submittedAt, submission.submittedAt);
+    assert.equal(Object.hasOwn(pendingSummary.submission, 'score'), false);
+    assert.equal(endedSummary.submission.score, 1);
+});
+
+test('duplicate pending assignment submission response is receipt-only', () => {
+    const assignment = buildLiveExam(new Date('2099-01-01T00:00:00.000Z'), {
+        examType: 'assignment'
+    });
+    const response = _private.buildStudentSubmissionResponse(buildSubmission(), assignment, { alreadySubmitted: true });
+
+    assert.equal(response.alreadySubmitted, true);
+    assert.equal(response.resultsAvailable, false);
+    assert.equal(Object.hasOwn(response, 'score'), false);
+    assert.equal(Object.hasOwn(response, 'review'), false);
+    assert.equal(Object.hasOwn(response, 'answers'), false);
+});
+
+test('ended assignment submission response includes full scorecard data', () => {
+    const assignment = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        examType: 'assignment'
+    });
+    const response = _private.buildStudentSubmissionResponse(buildSubmission(), assignment);
+
+    assert.equal(response.resultsAvailable, true);
+    assert.equal(response.score, 1);
+    assert.deepEqual(response.answers, [1]);
+    assert.equal(response.review[0].correctAnswer, '4');
+});
+
+test('practice question source filter excludes live exam and assignment authored questions', () => {
+    assert.deepEqual(_private.buildPracticeQuestionSourceFilter(), {
+        source: { $nin: ['liveExam', 'assignment'] }
+    });
+});

@@ -1,4 +1,6 @@
 const Submission = require('../models/Submission');
+const Exam = require('../models/Exam');
+const User = require('../models/User');
 const { normalizeCompetitionCategory } = require('../config/competition');
 
 const RANK_TIERS = ['Silver', 'Gold', 'Platinum', 'Master', 'Challenger', 'Legendary'];
@@ -8,6 +10,8 @@ const CATEGORY_MAX_POINTS = {
     daily: 10,
     weekly: 20
 };
+const ASSIGNMENT_COMPLETE_POINTS = 2;
+const ASSIGNMENT_MISSING_POINTS = -2;
 
 const RANK_LADDER = RANK_TIERS.flatMap((tier) => (
     RANK_LEVELS.map((level) => ({ tier, level, rankName: `${tier} ${level}` }))
@@ -60,6 +64,12 @@ function getEffectiveScore(submission) {
 }
 
 function shouldCountExam(exam, now = new Date()) {
+    if (exam.examType === 'assignment') {
+        const endTime = exam.endTime ? new Date(exam.endTime) : null;
+        if (!endTime || Number.isNaN(endTime.getTime()) || endTime > now) return false;
+        return Number(exam.totalMarks) > 0;
+    }
+
     if (exam.examType === 'assessment') {
         const startTime = exam.startTime ? new Date(exam.startTime) : null;
         if (startTime && !Number.isNaN(startTime.getTime()) && startTime > now) return false;
@@ -78,9 +88,27 @@ function shouldCountExam(exam, now = new Date()) {
     return Number(exam.totalMarks) > 0;
 }
 
+function isCompleteAssignmentSubmission(submission) {
+    const totalMarks = Number(submission?.exam?.totalMarks || 0);
+    const answers = Array.isArray(submission?.answers) ? submission.answers : [];
+    if (!totalMarks || answers.length < totalMarks) return false;
+
+    return answers.slice(0, totalMarks).every((answer) => (
+        answer !== undefined
+        && answer !== null
+        && answer !== -1
+        && Number.isInteger(answer)
+    ));
+}
+
 function getRankPointsForSubmission(submission, now = new Date()) {
     const exam = submission?.exam;
     if (!shouldCountExam(exam, now)) return null;
+
+    if (exam.examType === 'assignment') {
+        if (submission?.isDisqualified) return 0;
+        return isCompleteAssignmentSubmission(submission) ? ASSIGNMENT_COMPLETE_POINTS : 0;
+    }
 
     if (exam.examType === 'assessment') {
         const assessmentPoints = getEffectiveScore(submission);
@@ -95,7 +123,11 @@ function getRankPointsForSubmission(submission, now = new Date()) {
     return Number.isFinite(scaledPoints) ? scaledPoints : null;
 }
 
-function buildRankInfoMapFromSubmissions(submissions = [], studentIds = [], options = {}) {
+function getMissingAssignmentRankPoints() {
+    return ASSIGNMENT_MISSING_POINTS;
+}
+
+function buildRankTotalsFromSubmissions(submissions = [], studentIds = [], options = {}) {
     const now = options.now || new Date();
     const totalsByStudentId = new Map();
 
@@ -116,10 +148,65 @@ function buildRankInfoMapFromSubmissions(submissions = [], studentIds = [], opti
         totalsByStudentId.set(studentId, current);
     }
 
+    return totalsByStudentId;
+}
+
+function buildRankInfoMapFromSubmissions(submissions = [], studentIds = [], options = {}) {
+    const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, studentIds, options);
+
     return new Map([...totalsByStudentId.entries()].map(([studentId, total]) => [
         studentId,
         buildRankInfoFromPoints(total.points, total.countedExamCount)
     ]));
+}
+
+async function applyMissingAssignmentPenalties(totalsByStudentId, submissions = [], studentIds = [], options = {}) {
+    const now = options.now || new Date();
+    const normalizedStudentIds = [...new Set(studentIds.map((value) => value?.toString()).filter(Boolean))];
+    if (!normalizedStudentIds.length) return totalsByStudentId;
+
+    const [eligibleUsers, assignments] = await Promise.all([
+        User.find({
+            _id: { $in: normalizedStudentIds },
+            role: 'student',
+            hasClassAccess: true
+        }).select('_id').lean(),
+        Exam.find({
+            examType: 'assignment',
+            isLiveExam: true,
+            endTime: { $lte: now },
+            totalMarks: { $gt: 0 }
+        }).select('_id').lean()
+    ]);
+
+    const eligibleStudentIds = eligibleUsers.map((user) => user._id.toString());
+    const assignmentIds = assignments.map((assignment) => assignment._id.toString());
+    if (!eligibleStudentIds.length || !assignmentIds.length) return totalsByStudentId;
+
+    const submittedKeys = new Set(
+        submissions
+            .filter((submission) => submission?.exam?.examType === 'assignment')
+            .map((submission) => {
+                const studentId = getStudentId(submission.student);
+                const examId = submission.exam?._id?.toString?.() || submission.exam?.toString?.();
+                return studentId && examId ? `${studentId}:${examId}` : '';
+            })
+            .filter(Boolean)
+    );
+
+    for (const studentId of eligibleStudentIds) {
+        const total = totalsByStudentId.get(studentId) || { points: 0, countedExamCount: 0 };
+
+        for (const assignmentId of assignmentIds) {
+            if (submittedKeys.has(`${studentId}:${assignmentId}`)) continue;
+            total.points += ASSIGNMENT_MISSING_POINTS;
+            total.countedExamCount += 1;
+        }
+
+        totalsByStudentId.set(studentId, total);
+    }
+
+    return totalsByStudentId;
 }
 
 async function getRankInfoByStudentIds(studentIds = [], options = {}) {
@@ -130,7 +217,13 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
         .populate('exam', 'totalMarks competitionCategory isLiveExam examType startTime endTime')
         .lean();
 
-    return buildRankInfoMapFromSubmissions(submissions, normalizedStudentIds, options);
+    const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, normalizedStudentIds, options);
+    await applyMissingAssignmentPenalties(totalsByStudentId, submissions, normalizedStudentIds, options);
+
+    return new Map([...totalsByStudentId.entries()].map(([studentId, total]) => [
+        studentId,
+        buildRankInfoFromPoints(total.points, total.countedExamCount)
+    ]));
 }
 
 async function getRankInfoByStudentId(studentId, options = {}) {
@@ -146,6 +239,8 @@ module.exports = {
     getDefaultRankInfo,
     getRankInfoByStudentId,
     getRankInfoByStudentIds,
+    getMissingAssignmentRankPoints,
     getRankPointsForSubmission,
+    isCompleteAssignmentSubmission,
     shouldCountExam
 };
