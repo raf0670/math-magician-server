@@ -100,6 +100,11 @@ function getPaymentMethod(value) {
     return PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : '';
 }
 
+function getPaymentChoice(value) {
+    const paymentChoice = clean(value);
+    return PAYMENT_CHOICES.includes(paymentChoice) ? paymentChoice : '';
+}
+
 async function findExistingTransaction(trxID, excludedPaymentId = null) {
     const trxIDNormalized = clean(trxID).toUpperCase();
     if (!trxIDNormalized) return null;
@@ -313,7 +318,7 @@ async function syncUserPaymentAccess(userId) {
 exports.submitManualEnrollment = async (req, res) => {
     try {
         const { planId, formData } = req.body;
-        const paymentChoice = clean(req.body.paymentChoice || 'full');
+        const paymentChoice = getPaymentChoice(req.body.paymentChoice);
         const paymentMethod = getPaymentMethod(req.body.paymentMethod || formData?.paymentMethod);
         const plan = getPaymentPlan(planId);
 
@@ -516,7 +521,7 @@ exports.getMyBooking = async (req, res) => {
 
 exports.submitBookedCheckout = async (req, res) => {
     try {
-        const paymentChoice = clean(req.body.paymentChoice || 'full');
+        const paymentChoice = getPaymentChoice(req.body.paymentChoice);
         const paymentMethod = getPaymentMethod(req.body.paymentMethod);
         const trxID = clean(req.body.trxID || req.body.bkashTrxID || req.body.transactionId);
         const referencePayload = getReferencePayload(req.body);
@@ -866,4 +871,9 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
         const responseStatus = error.name === 'ValidationError' ? 400 : 500;
         res.status(responseStatus).json({ success: false, message: error.message });
     }
+};
+
+exports._private = {
+    getPaymentChoice,
+    getPlanPaymentMeta
 };

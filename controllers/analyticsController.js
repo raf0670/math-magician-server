@@ -3,7 +3,7 @@ const Exam = require('../models/Exam');
 const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
 const { HOUSES, HOUSE_META, normalizeCompetitionCategory, normalizeHouse } = require('../config/competition');
-const { getDefaultRankInfo, getRankInfoByStudentId, getRankInfoByStudentIds, buildRankInfoMapFromSubmissions } = require('../services/rankService');
+const { getDefaultRankInfo, getRankInfoByStudentId, getRankInfoByStudentIds } = require('../services/rankService');
 
 const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 
@@ -165,11 +165,7 @@ async function getCompetitionData() {
         }
     }
 
-    const rankInfoByStudentId = buildRankInfoMapFromSubmissions(
-        finalizedSubmissions,
-        [...leaderboardByStudentId.keys()],
-        { now }
-    );
+    const rankInfoByStudentId = await getRankInfoByStudentIds([...leaderboardByStudentId.keys()], { now });
 
     const leaderboard = [...leaderboardByStudentId.values()]
         .map((entry) => ({

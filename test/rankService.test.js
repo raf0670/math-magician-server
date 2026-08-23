@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getMissingAssignmentRankPoints, getRankPointsForSubmission, shouldCountExam } = require('../services/rankService');
+const { _private, getMissingAssignmentRankPoints, getRankPointsForSubmission, shouldCountExam } = require('../services/rankService');
 
 test('timed assessment exams count for rank points after the official start time', () => {
     const exam = {
@@ -121,6 +121,64 @@ test('disqualified assignment submission gives zero rank points', () => {
     assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-24T18:00:00.000Z')), 0);
 });
 
-test('missing assignment penalty is minus two rank points', () => {
-    assert.equal(getMissingAssignmentRankPoints(), -2);
+test('missing assignment penalty is minus five rank points', () => {
+    assert.equal(getMissingAssignmentRankPoints(), -5);
+});
+
+test('ended daily live exams are eligible for missing-exam penalties', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'daily',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 10
+    };
+
+    assert.equal(_private.shouldPenalizeMissingDailyLiveExam(exam, new Date('2026-08-16T16:30:01.000Z')), true);
+});
+
+test('weekly and not-yet-ended live exams are not eligible for missing daily penalties', () => {
+    const endedWeeklyExam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'weekly',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 10
+    };
+    const openDailyExam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'daily',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 10
+    };
+
+    assert.equal(_private.shouldPenalizeMissingDailyLiveExam(endedWeeklyExam, new Date('2026-08-16T16:30:01.000Z')), false);
+    assert.equal(_private.shouldPenalizeMissingDailyLiveExam(openDailyExam, new Date('2026-08-16T16:29:59.000Z')), false);
+});
+
+test('missing daily live exam applies minus five rank points to eligible students', () => {
+    const totals = new Map([['student-1', { points: 0, countedExamCount: 0 }]]);
+
+    _private.applyMissingPenaltiesForEligibleStudents(
+        totals,
+        [],
+        ['student-1'],
+        [{ _id: 'daily-exam-1', penalty: -5 }]
+    );
+
+    assert.deepEqual(totals.get('student-1'), { points: -5, countedExamCount: 1 });
+});
+
+test('submitted daily live exams do not receive missing-exam penalties', () => {
+    const totals = new Map([['student-1', { points: 7, countedExamCount: 1 }]]);
+
+    _private.applyMissingPenaltiesForEligibleStudents(
+        totals,
+        [{ student: 'student-1', exam: { _id: 'daily-exam-1' } }],
+        ['student-1'],
+        [{ _id: 'daily-exam-1', penalty: -5 }]
+    );
+
+    assert.deepEqual(totals.get('student-1'), { points: 7, countedExamCount: 1 });
 });

@@ -11,7 +11,8 @@ const CATEGORY_MAX_POINTS = {
     weekly: 20
 };
 const ASSIGNMENT_COMPLETE_POINTS = 2;
-const ASSIGNMENT_MISSING_POINTS = -2;
+const ASSIGNMENT_MISSING_POINTS = -5;
+const DAILY_LIVE_EXAM_MISSING_POINTS = -5;
 
 const RANK_LADDER = RANK_TIERS.flatMap((tier) => (
     RANK_LEVELS.map((level) => ({ tier, level, rankName: `${tier} ${level}` }))
@@ -59,8 +60,23 @@ function getStudentId(value) {
     return value?._id?.toString?.() || value?.toString?.() || '';
 }
 
+function getExamId(value) {
+    return value?._id?.toString?.() || value?.toString?.() || '';
+}
+
 function getEffectiveScore(submission) {
     return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
+}
+
+function shouldPenalizeMissingDailyLiveExam(exam, now = new Date()) {
+    if (!exam?.isLiveExam) return false;
+    if (exam.examType && exam.examType !== 'official') return false;
+    if (normalizeCompetitionCategory(exam.competitionCategory) !== 'daily') return false;
+
+    const endTime = exam.endTime ? new Date(exam.endTime) : null;
+    if (!endTime || Number.isNaN(endTime.getTime()) || endTime > now) return false;
+
+    return Number(exam.totalMarks) > 0;
 }
 
 function shouldCountExam(exam, now = new Date()) {
@@ -160,12 +176,42 @@ function buildRankInfoMapFromSubmissions(submissions = [], studentIds = [], opti
     ]));
 }
 
-async function applyMissingAssignmentPenalties(totalsByStudentId, submissions = [], studentIds = [], options = {}) {
+function applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions = [], eligibleStudentIds = [], penaltyExams = []) {
+    if (!eligibleStudentIds.length || !penaltyExams.length) return totalsByStudentId;
+
+    const submittedKeys = new Set(
+        submissions
+            .map((submission) => {
+                const studentId = getStudentId(submission.student);
+                const examId = getExamId(submission.exam);
+                return studentId && examId ? `${studentId}:${examId}` : '';
+            })
+            .filter(Boolean)
+    );
+
+    for (const studentId of eligibleStudentIds) {
+        const total = totalsByStudentId.get(studentId) || { points: 0, countedExamCount: 0 };
+
+        for (const penaltyExam of penaltyExams) {
+            const examId = getExamId(penaltyExam);
+            if (!examId || submittedKeys.has(`${studentId}:${examId}`)) continue;
+
+            total.points += penaltyExam.penalty;
+            total.countedExamCount += 1;
+        }
+
+        totalsByStudentId.set(studentId, total);
+    }
+
+    return totalsByStudentId;
+}
+
+async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [], studentIds = [], options = {}) {
     const now = options.now || new Date();
     const normalizedStudentIds = [...new Set(studentIds.map((value) => value?.toString()).filter(Boolean))];
     if (!normalizedStudentIds.length) return totalsByStudentId;
 
-    const [eligibleUsers, assignments] = await Promise.all([
+    const [eligibleUsers, assignments, dailyLiveExams] = await Promise.all([
         User.find({
             _id: { $in: normalizedStudentIds },
             role: 'student',
@@ -176,37 +222,26 @@ async function applyMissingAssignmentPenalties(totalsByStudentId, submissions = 
             isLiveExam: true,
             endTime: { $lte: now },
             totalMarks: { $gt: 0 }
+        }).select('_id').lean(),
+        Exam.find({
+            isLiveExam: true,
+            $or: [
+                { examType: 'official' },
+                { examType: { $exists: false } }
+            ],
+            competitionCategory: 'daily',
+            endTime: { $lte: now },
+            totalMarks: { $gt: 0 }
         }).select('_id').lean()
     ]);
 
     const eligibleStudentIds = eligibleUsers.map((user) => user._id.toString());
-    const assignmentIds = assignments.map((assignment) => assignment._id.toString());
-    if (!eligibleStudentIds.length || !assignmentIds.length) return totalsByStudentId;
+    const penaltyExams = [
+        ...assignments.map((assignment) => ({ _id: assignment._id, penalty: ASSIGNMENT_MISSING_POINTS })),
+        ...dailyLiveExams.map((exam) => ({ _id: exam._id, penalty: DAILY_LIVE_EXAM_MISSING_POINTS }))
+    ];
 
-    const submittedKeys = new Set(
-        submissions
-            .filter((submission) => submission?.exam?.examType === 'assignment')
-            .map((submission) => {
-                const studentId = getStudentId(submission.student);
-                const examId = submission.exam?._id?.toString?.() || submission.exam?.toString?.();
-                return studentId && examId ? `${studentId}:${examId}` : '';
-            })
-            .filter(Boolean)
-    );
-
-    for (const studentId of eligibleStudentIds) {
-        const total = totalsByStudentId.get(studentId) || { points: 0, countedExamCount: 0 };
-
-        for (const assignmentId of assignmentIds) {
-            if (submittedKeys.has(`${studentId}:${assignmentId}`)) continue;
-            total.points += ASSIGNMENT_MISSING_POINTS;
-            total.countedExamCount += 1;
-        }
-
-        totalsByStudentId.set(studentId, total);
-    }
-
-    return totalsByStudentId;
+    return applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions, eligibleStudentIds, penaltyExams);
 }
 
 async function getRankInfoByStudentIds(studentIds = [], options = {}) {
@@ -218,7 +253,7 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
         .lean();
 
     const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, normalizedStudentIds, options);
-    await applyMissingAssignmentPenalties(totalsByStudentId, submissions, normalizedStudentIds, options);
+    await applyMissingRankPointPenalties(totalsByStudentId, submissions, normalizedStudentIds, options);
 
     return new Map([...totalsByStudentId.entries()].map(([studentId, total]) => [
         studentId,
@@ -242,5 +277,9 @@ module.exports = {
     getMissingAssignmentRankPoints,
     getRankPointsForSubmission,
     isCompleteAssignmentSubmission,
-    shouldCountExam
+    shouldCountExam,
+    _private: {
+        applyMissingPenaltiesForEligibleStudents,
+        shouldPenalizeMissingDailyLiveExam
+    }
 };
