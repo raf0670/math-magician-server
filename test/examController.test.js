@@ -155,12 +155,12 @@ test('manual or too-late live exam submissions are outside the technical grace w
     );
 });
 
-test('assignment date converts to a full Bangladesh calendar day in UTC', () => {
-    const window = _private.getBangladeshFullDayWindow('2026-08-24');
+test('assignment date converts to a 4pm Bangladesh window in UTC', () => {
+    const window = _private.getBangladeshAssignmentWindow('2026-08-24');
 
     assert.equal(window.assignmentDate, '2026-08-24');
-    assert.equal(window.startTime.toISOString(), '2026-08-23T18:00:00.000Z');
-    assert.equal(window.endTime.toISOString(), '2026-08-24T17:59:59.999Z');
+    assert.equal(window.startTime.toISOString(), '2026-08-24T10:00:00.000Z');
+    assert.equal(window.endTime.toISOString(), '2026-08-25T09:59:59.999Z');
 });
 
 test('assignment payload accepts assessment-style strict JSON questions', () => {
@@ -181,6 +181,7 @@ test('assignment payload accepts assessment-style strict JSON questions', () => 
     }, '507f1f77bcf86cd799439011');
 
     assert.deepEqual(errors, []);
+    assert.equal(payload.duration, 1440);
     assert.equal(payload.questions.length, 1);
     assert.equal(payload.questions[0].instruction, 'Solve the math.');
     assert.equal(payload.questions[0].correctOptionIndex, 1);

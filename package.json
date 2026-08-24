@@ -10,6 +10,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "backfill:houses": "node scripts/backfillHouses.js",
+    "backfill:assignment-windows": "node scripts/backfillAssignmentWindows.js",
     "test": "node --test"
   },
   "keywords": [],

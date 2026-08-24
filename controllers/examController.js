@@ -4,6 +4,7 @@ const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
 const { normalizeCompetitionCategory } = require('../config/competition');
 const { getAreaBalancedQuizUnits, getQuestionEffectiveArea } = require('../utils/quizBalancer');
+const { calculateAssignmentDurationMinutes, getBangladeshAssignmentWindow } = require('../utils/assignmentWindow');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
@@ -16,7 +17,6 @@ const LEGACY_GENERATED_EXAM_TITLE = /Random Questions/i;
 const LIVE_EXAM_SOURCE = 'liveExam';
 const ASSIGNMENT_SOURCE = 'assignment';
 const ASSIGNMENT_EXAM_TYPE = 'assignment';
-const BANGLADESH_UTC_OFFSET_MINUTES = 6 * 60;
 const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
 const LIVE_EXAM_CACHE_GRACE_MS = Number(process.env.LIVE_EXAM_CACHE_GRACE_MS) || 10 * 60 * 1000;
 const LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS = Number(process.env.LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS) || 30 * 1000;
@@ -939,27 +939,6 @@ function parseStrictJsonArray(value, errors, fieldName = 'questions') {
     }
 }
 
-function getBangladeshFullDayWindow(assignmentDate) {
-    const rawDate = clean(assignmentDate);
-    const match = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-
-    if (!match) {
-        return { startTime: null, endTime: null, assignmentDate: rawDate };
-    }
-
-    const year = Number(match[1]);
-    const monthIndex = Number(match[2]) - 1;
-    const day = Number(match[3]);
-    const utcStartMs = Date.UTC(year, monthIndex, day, 0, 0, 0, 0) - BANGLADESH_UTC_OFFSET_MINUTES * 60000;
-    const utcEndMs = Date.UTC(year, monthIndex, day, 23, 59, 59, 999) - BANGLADESH_UTC_OFFSET_MINUTES * 60000;
-
-    return {
-        startTime: new Date(utcStartMs),
-        endTime: new Date(utcEndMs),
-        assignmentDate: rawDate
-    };
-}
-
 function parsePassingMarks(value, totalMarks, errors) {
     const rawValue = value?.toString?.().trim?.();
     if (value === undefined || value === null || rawValue === '') {
@@ -1099,7 +1078,8 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
 function parseAssignmentPayload(body = {}, userId) {
     const title = clean(body.title);
     const errors = [];
-    const { startTime, endTime, assignmentDate } = getBangladeshFullDayWindow(body.assignmentDate);
+    const assignmentWindow = getBangladeshAssignmentWindow(body.assignmentDate);
+    const { startTime, endTime, assignmentDate } = assignmentWindow;
     const questions = parseStrictJsonArray(body.questions, errors);
 
     if (!title) errors.push('Assignment title is required.');
@@ -1171,7 +1151,7 @@ function parseAssignmentPayload(body = {}, userId) {
             assignmentDate,
             startTime,
             endTime,
-            duration: startTime && endTime ? calculateDurationMinutes(startTime, endTime) : 1,
+            duration: calculateAssignmentDurationMinutes(assignmentWindow),
             questions: normalizedQuestions
         },
         errors
@@ -1715,7 +1695,7 @@ exports.getAdminAssignments = async (req, res) => {
     }
 };
 
-// @desc    Create a full-day assignment and its authored questions
+// @desc    Create a 4pm-to-next-day assignment and its authored questions
 // @route   POST /api/exams/assignments/admin
 // @access  Private/Admin
 exports.createAssignment = async (req, res) => {
@@ -1761,7 +1741,7 @@ exports.createAssignment = async (req, res) => {
     }
 };
 
-// @desc    Update a full-day assignment and replace its authored questions
+// @desc    Update a 4pm-to-next-day assignment and replace its authored questions
 // @route   PATCH /api/exams/assignments/admin/:id
 // @access  Private/Admin
 exports.updateAssignment = async (req, res) => {
@@ -2008,7 +1988,7 @@ exports._private = {
     buildPracticeQuestionSourceFilter,
     buildLiveExamResultStatus,
     buildStudentSubmissionResponse,
-    getBangladeshFullDayWindow,
+    getBangladeshAssignmentWindow,
     getDefaultPassingMarks,
     getEffectivePassingMarks,
     isTimerExpiredSubmissionInsideGrace,
