@@ -80,6 +80,8 @@ function shouldPenalizeMissingDailyLiveExam(exam, now = new Date()) {
 }
 
 function shouldCountExam(exam, now = new Date()) {
+    if (!exam) return false;
+
     if (exam.examType === 'assignment') {
         const endTime = exam.endTime ? new Date(exam.endTime) : null;
         if (!endTime || Number.isNaN(endTime.getTime()) || endTime > now) return false;

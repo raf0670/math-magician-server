@@ -53,6 +53,11 @@ test('untimed generated practice exams still do not count for rank points', () =
     assert.equal(getRankPointsForSubmission(submission), null);
 });
 
+test('missing populated exam references do not count for rank points', () => {
+    assert.equal(shouldCountExam(null), false);
+    assert.equal(getRankPointsForSubmission({ exam: null, score: 10 }), null);
+});
+
 test('failed live exam submissions still contribute their achieved score to rank points', () => {
     const exam = {
         examType: 'official',
