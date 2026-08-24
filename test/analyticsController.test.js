@@ -42,6 +42,19 @@ test('official live exam submissions are available after the exam end time', () 
     assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-16T16:00:01.000Z')), true);
 });
 
+test('official live exam submissions are available at the exact exam end time', () => {
+    const submission = {
+        exam: {
+            examType: 'official',
+            isLiveExam: true,
+            endTime: new Date('2026-08-16T16:00:00.000Z')
+        },
+        score: 9
+    };
+
+    assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-16T16:00:00.000Z')), true);
+});
+
 test('assessment submissions keep their existing analytics availability', () => {
     const submission = {
         exam: {

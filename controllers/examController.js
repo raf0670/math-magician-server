@@ -4,7 +4,12 @@ const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
 const { normalizeCompetitionCategory } = require('../config/competition');
 const { getAreaBalancedQuizUnits, getQuestionEffectiveArea } = require('../utils/quizBalancer');
-const { calculateAssignmentDurationMinutes, getBangladeshAssignmentWindow } = require('../utils/assignmentWindow');
+const {
+    DAILY_LIVE_EXAM_DURATION_MINUTES,
+    calculateAssignmentDurationMinutes,
+    getBangladeshAssignmentWindow,
+    getBangladeshDailyLiveExamWindow
+} = require('../utils/assignmentWindow');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'];
@@ -83,7 +88,7 @@ function getLiveExamStatus(exam, now = new Date()) {
     }
 
     if (now < startTime) return 'upcoming';
-    if (now <= endTime) return 'open';
+    if (now < endTime) return 'open';
     return 'ended';
 }
 
@@ -103,7 +108,7 @@ function areLiveExamResultsAvailable(exam, now = new Date()) {
     if (!isDelayedResultExam(exam)) return true;
 
     const endTime = exam?.endTime ? new Date(exam.endTime) : null;
-    return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now > endTime);
+    return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now >= endTime);
 }
 
 function isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, now = new Date()) {
@@ -111,7 +116,7 @@ function isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, now = ne
         submissionReason === 'timer_expired'
         && endTime
         && !Number.isNaN(endTime.getTime())
-        && now > endTime
+        && now >= endTime
         && now.getTime() - endTime.getTime() <= LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS
     );
 }
@@ -962,15 +967,25 @@ function parsePassingMarks(value, totalMarks, errors) {
 function parseLiveExamPayload(body = {}, userId) {
     const title = clean(body.title);
     const competitionCategory = normalizeCompetitionCategory(body.competitionCategory);
-    const startTime = new Date(body.startTime);
-    const endTime = new Date(body.endTime);
+    const dailyWindow = competitionCategory === 'daily'
+        ? getBangladeshDailyLiveExamWindow(body.examDate)
+        : null;
+    const startTime = dailyWindow?.startTime || new Date(body.startTime);
+    const endTime = dailyWindow?.endTime || new Date(body.endTime);
+    const examDate = dailyWindow?.examDate || null;
     const questions = Array.isArray(body.questions) ? body.questions : [];
     const errors = [];
 
     if (!title) errors.push('Live exam title is required.');
-    if (Number.isNaN(startTime.getTime())) errors.push('Please add a valid start time.');
-    if (Number.isNaN(endTime.getTime())) errors.push('Please add a valid end time.');
-    if (!Number.isNaN(startTime.getTime()) && !Number.isNaN(endTime.getTime()) && endTime <= startTime) {
+    if (competitionCategory === 'daily') {
+        if (!examDate || !startTime || !endTime || Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) {
+            errors.push('Please add a valid daily exam date in YYYY-MM-DD format.');
+        }
+    } else {
+        if (Number.isNaN(startTime.getTime())) errors.push('Please add a valid start time.');
+        if (Number.isNaN(endTime.getTime())) errors.push('Please add a valid end time.');
+    }
+    if (startTime && endTime && !Number.isNaN(startTime.getTime()) && !Number.isNaN(endTime.getTime()) && endTime <= startTime) {
         errors.push('Live exam end time must be after the start time.');
     }
     if (!questions.length) errors.push('Please add at least one question.');
@@ -1031,9 +1046,14 @@ function parseLiveExamPayload(body = {}, userId) {
             competitionCategory,
             startTime,
             endTime,
-            duration: Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())
-                ? 1
-                : calculateDurationMinutes(startTime, endTime),
+            examDate,
+            duration: competitionCategory === 'daily'
+                ? DAILY_LIVE_EXAM_DURATION_MINUTES
+                : (
+                    Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())
+                        ? 1
+                        : calculateDurationMinutes(startTime, endTime)
+                ),
             passingMarks,
             questions: normalizedQuestions
         },
@@ -1479,7 +1499,7 @@ exports.getLiveExams = async (req, res) => {
     try {
         const exams = await Exam.find(buildOfficialLiveExamFilter())
             .sort({ startTime: -1 })
-            .select('title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
+            .select('title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime examDate questions createdAt createdBy')
             .lean();
 
         const examIds = exams.map((exam) => exam._id);
@@ -1557,6 +1577,7 @@ exports.createLiveExam = async (req, res) => {
             isLiveExam: true,
             startTime: payload.startTime,
             endTime: payload.endTime,
+            examDate: payload.examDate || null,
             createdBy: req.user._id
         });
 
@@ -1611,7 +1632,8 @@ exports.updateLiveExam = async (req, res) => {
                 allowRetakes: false,
                 isLiveExam: true,
                 startTime: payload.startTime,
-                endTime: payload.endTime
+                endTime: payload.endTime,
+                examDate: payload.examDate || null
             },
             { new: true, runValidators: true }
         )
@@ -1847,7 +1869,7 @@ exports.getExam = async (req, res) => {
                 });
             }
 
-            const includeAnswers = currentTime > endTime;
+            const includeAnswers = currentTime >= endTime;
             const responseExam = includeAnswers
                 ? await attachStudentLiveSubmissionState(liveExam, req.user?._id || req.user?.id, currentTime)
                 : await attachStudentLiveSubmissionState(redactExamForStudent(liveExam), req.user?._id || req.user?.id, currentTime);
@@ -1937,7 +1959,7 @@ exports.submitExam = async (req, res) => {
                 });
             }
 
-            if (currentTime > endTime && !isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, currentTime)) {
+            if (currentTime >= endTime && !isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, currentTime)) {
                 return res.status(403).json({
                     success: false,
                     message: 'The submission portal has closed! You missed the official live exam deadline.'
@@ -1989,9 +2011,11 @@ exports._private = {
     buildLiveExamResultStatus,
     buildStudentSubmissionResponse,
     getBangladeshAssignmentWindow,
+    getBangladeshDailyLiveExamWindow,
     getDefaultPassingMarks,
     getEffectivePassingMarks,
     isTimerExpiredSubmissionInsideGrace,
+    parseLiveExamPayload,
     parseAssignmentPayload,
     serializeExamSummary
 };

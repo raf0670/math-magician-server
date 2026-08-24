@@ -36,6 +36,24 @@ function buildSubmission(overrides = {}) {
     };
 }
 
+function buildLiveExamPayload(overrides = {}) {
+    return {
+        title: 'Daily Live Exam',
+        competitionCategory: 'daily',
+        examDate: '2026-08-25',
+        questions: [
+            {
+                subject: 'Maths',
+                question: '2 + 2 = ?',
+                options: ['3', '4', '5', '6', 'None of these'],
+                correct_answer: '4',
+                explanation: '2 + 2 equals 4.'
+            }
+        ],
+        ...overrides
+    };
+}
+
 test('pending official live exam submission response hides score, review, and answers', () => {
     const exam = buildLiveExam(new Date('2099-01-01T00:00:00.000Z'));
     const response = _private.buildStudentSubmissionResponse(buildSubmission(), exam);
@@ -161,6 +179,50 @@ test('assignment date converts to a 4pm Bangladesh window in UTC', () => {
     assert.equal(window.assignmentDate, '2026-08-24');
     assert.equal(window.startTime.toISOString(), '2026-08-24T10:00:00.000Z');
     assert.equal(window.endTime.toISOString(), '2026-08-25T09:59:59.999Z');
+});
+
+test('daily live exam date converts to a 10:40pm Bangladesh window in UTC', () => {
+    const window = _private.getBangladeshDailyLiveExamWindow('2026-08-25');
+
+    assert.equal(window.examDate, '2026-08-25');
+    assert.equal(window.startTime.toISOString(), '2026-08-25T16:40:00.000Z');
+    assert.equal(window.endTime.toISOString(), '2026-08-25T17:20:00.000Z');
+});
+
+test('daily live exam payload derives schedule from exam date and sets 15 minute duration', () => {
+    const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        startTime: '1999-01-01T00:00:00.000Z',
+        endTime: '1999-01-01T01:00:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.examDate, '2026-08-25');
+    assert.equal(payload.startTime.toISOString(), '2026-08-25T16:40:00.000Z');
+    assert.equal(payload.endTime.toISOString(), '2026-08-25T17:20:00.000Z');
+    assert.equal(payload.duration, 15);
+});
+
+test('weekly live exam payload keeps manual start and end times', () => {
+    const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        competitionCategory: 'weekly',
+        examDate: '',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:30:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.examDate, null);
+    assert.equal(payload.startTime.toISOString(), '2026-08-25T14:00:00.000Z');
+    assert.equal(payload.endTime.toISOString(), '2026-08-25T15:30:00.000Z');
+    assert.equal(payload.duration, 90);
+});
+
+test('daily live exam payload rejects invalid exam dates', () => {
+    const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        examDate: '2026-02-31'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.ok(errors.includes('Please add a valid daily exam date in YYYY-MM-DD format.'));
 });
 
 test('assignment payload accepts assessment-style strict JSON questions', () => {

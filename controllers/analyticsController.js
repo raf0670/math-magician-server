@@ -45,7 +45,7 @@ function isPendingDelayedResultExam(exam, now = new Date()) {
     if (!isOfficialLiveExam && !isAssignment) return false;
 
     const endTime = exam.endTime ? new Date(exam.endTime) : null;
-    return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now <= endTime);
+    return Boolean(endTime && !Number.isNaN(endTime.getTime()) && now < endTime);
 }
 
 function isSubmissionResultAvailable(submission, now = new Date()) {
