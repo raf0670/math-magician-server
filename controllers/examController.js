@@ -24,7 +24,7 @@ const ASSIGNMENT_SOURCE = 'assignment';
 const ASSIGNMENT_EXAM_TYPE = 'assignment';
 const LIVE_EXAM_CACHE_TTL_MS = Number(process.env.LIVE_EXAM_CACHE_TTL_MS) || 5 * 60 * 1000;
 const LIVE_EXAM_CACHE_GRACE_MS = Number(process.env.LIVE_EXAM_CACHE_GRACE_MS) || 10 * 60 * 1000;
-const LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS = Number(process.env.LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS) || 30 * 1000;
+const LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS = Number(process.env.LIVE_EXAM_TIMER_SUBMISSION_GRACE_MS) || 60 * 1000;
 const liveExamCache = new Map();
 const QUIZ_SUBJECT_WEIGHTS = [
     { subject: 'English', weight: 45 },
