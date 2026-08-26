@@ -39,6 +39,10 @@ function getEffectiveScore(submission) {
     return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
 }
 
+function isOfficialLiveExam(exam) {
+    return Boolean(exam?.isLiveExam && (!exam.examType || exam.examType === 'official'));
+}
+
 function isPendingDelayedResultExam(exam, now = new Date()) {
     const isOfficialLiveExam = exam?.isLiveExam && (!exam.examType || exam.examType === 'official');
     const isAssignment = exam?.isLiveExam && exam.examType === 'assignment';
@@ -71,6 +75,85 @@ function sortCompetitionEntries(first, second) {
     if (second.totalScore !== first.totalScore) return second.totalScore - first.totalScore;
     if (second.bestScore !== first.bestScore) return second.bestScore - first.bestScore;
     return new Date(first.lastSubmittedAt || 0) - new Date(second.lastSubmittedAt || 0);
+}
+
+function sortExamLeaderboardEntries(first, second) {
+    if (second.score !== first.score) return second.score - first.score;
+    const submittedDelta = new Date(first.submittedAt || 0) - new Date(second.submittedAt || 0);
+    if (submittedDelta !== 0) return submittedDelta;
+    return (first.studentName || '').localeCompare(second.studentName || '');
+}
+
+function serializeExamForLeaderboard(exam) {
+    if (!exam) return null;
+
+    return {
+        _id: exam._id,
+        title: exam.title || 'Live Exam',
+        totalMarks: Number(exam.totalMarks || 0),
+        competitionCategory: normalizeCompetitionCategory(exam.competitionCategory),
+        startTime: exam.startTime || null,
+        endTime: exam.endTime || null
+    };
+}
+
+function buildExamLeaderboard(submissions = []) {
+    let previousScore = null;
+    let previousRank = 0;
+
+    return submissions
+        .map((submission) => ({
+            studentId: getStudentId(submission.student),
+            studentName: submission.student?.name || 'Student',
+            house: normalizeHouse(submission.student?.house) || '',
+            score: getEffectiveScore(submission),
+            originalScore: Number(submission.score || 0),
+            isDisqualified: Boolean(submission.isDisqualified),
+            submittedAt: submission.submittedAt
+        }))
+        .sort(sortExamLeaderboardEntries)
+        .map((entry, index) => {
+            const rank = previousScore === entry.score ? previousRank : index + 1;
+            previousScore = entry.score;
+            previousRank = rank;
+
+            return {
+                ...entry,
+                rank
+            };
+        });
+}
+
+function buildExamLeaderboardResponse(exam, submissions = [], options = {}) {
+    const now = options.now || new Date();
+    const resultsAvailable = !isPendingDelayedResultExam(exam, now);
+    const examPayload = serializeExamForLeaderboard(exam);
+
+    if (!resultsAvailable) {
+        return {
+            success: true,
+            count: 0,
+            resultsAvailable: false,
+            resultsAvailableAt: exam?.endTime || null,
+            data: [],
+            exam: examPayload,
+            currentUserEntry: null
+        };
+    }
+
+    const leaderboard = buildExamLeaderboard(submissions);
+    const currentUserId = options.currentUserId?.toString?.() || '';
+    const currentUserEntry = leaderboard.find((entry) => entry.studentId === currentUserId) || null;
+
+    return {
+        success: true,
+        count: leaderboard.length,
+        resultsAvailable: true,
+        resultsAvailableAt: exam?.endTime || null,
+        data: leaderboard,
+        exam: examPayload,
+        currentUserEntry
+    };
 }
 
 async function getCompetitionData() {
@@ -319,38 +402,22 @@ exports.getExamLeaderboard = async (req, res) => {
         }
 
         const exam = await Exam.findById(examId)
-            .select('examType isLiveExam endTime')
+            .select('title totalMarks competitionCategory examType isLiveExam startTime endTime')
             .lean();
-        if (exam && isPendingDelayedResultExam(exam)) {
-            return res.status(200).json({
-                success: true,
-                count: 0,
-                resultsAvailable: false,
-                resultsAvailableAt: exam.endTime,
-                data: []
-            });
+        if (!exam || !isOfficialLiveExam(exam)) {
+            return res.status(404).json({ success: false, message: 'Live exam was not found.' });
         }
 
-        const submissions = await Submission.find({ exam: examId })
-            .populate('student', 'name house')
-            .sort({ score: -1, submittedAt: 1 })
-            .lean();
-        const leaderboard = submissions.map((submission, index) => ({
-            rank: index + 1,
-            studentId: getStudentId(submission.student),
-            studentName: submission.student?.name || 'Student',
-            house: normalizeHouse(submission.student?.house) || '',
-            score: getEffectiveScore(submission),
-            originalScore: submission.score,
-            isDisqualified: Boolean(submission.isDisqualified),
-            submittedAt: submission.submittedAt
-        }));
+        const submissions = isPendingDelayedResultExam(exam)
+            ? []
+            : await Submission.find({ exam: examId })
+                .populate('student', 'name house')
+                .sort({ score: -1, submittedAt: 1 })
+                .lean();
 
-        res.status(200).json({
-            success: true,
-            count: leaderboard.length,
-            data: leaderboard
-        });
+        res.status(200).json(buildExamLeaderboardResponse(exam, submissions, {
+            currentUserId: req.user?._id || req.user?.id
+        }));
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -456,8 +523,11 @@ exports.updateSubmissionModeration = async (req, res) => {
 };
 
 exports._private = {
+    buildExamLeaderboard,
+    buildExamLeaderboardResponse,
     buildCompetitionExamFilter,
     buildOfficialExamFilter,
+    isOfficialLiveExam,
     isPendingOfficialLiveExam: isPendingDelayedResultExam,
     isPendingDelayedResultExam,
     isSubmissionResultAvailable

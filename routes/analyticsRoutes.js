@@ -8,7 +8,7 @@ const {
     getExamLeaderboard,
     updateSubmissionModeration
 } = require('../controllers/analyticsController');
-const { protect, authorizeAdmin } = require('../middleware/auth');
+const { protect, authorizeAdmin, authorizeApprovedAccess } = require('../middleware/auth');
 
 // Both analytics dashboard pathways are private; you must be a logged-in user to view stats
 router.get('/leaderboard', protect, getGlobalLeaderboard);
@@ -17,6 +17,6 @@ router.get('/my-stats', protect, getStudentStats);
 router.get('/admin/live-exams/:examId/submissions', protect, authorizeAdmin, getAdminExamSubmissions);
 router.get('/admin/assignments/:examId/submissions', protect, authorizeAdmin, getAdminExamSubmissions);
 router.patch('/admin/submissions/:submissionId/moderation', protect, authorizeAdmin, updateSubmissionModeration);
-router.get('/leaderboard/:examId', protect, getExamLeaderboard);
+router.get('/leaderboard/:examId', protect, authorizeApprovedAccess, getExamLeaderboard);
 
 module.exports = router;

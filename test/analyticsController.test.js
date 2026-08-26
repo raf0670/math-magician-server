@@ -81,3 +81,85 @@ test('assignment submissions are unavailable before the assignment deadline', ()
     assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-24T17:00:00.000Z')), false);
     assert.equal(_private.isSubmissionResultAvailable(submission, new Date('2026-08-24T18:00:00.000Z')), true);
 });
+
+test('exam leaderboard response hides rows before an official live exam ends', () => {
+    const exam = {
+        _id: 'exam-1',
+        title: 'Daily Live Exam',
+        totalMarks: 10,
+        competitionCategory: 'daily',
+        examType: 'official',
+        isLiveExam: true,
+        endTime: new Date('2026-08-24T18:00:00.000Z')
+    };
+    const response = _private.buildExamLeaderboardResponse(exam, [
+        {
+            student: { _id: 'student-1', name: 'A Student', house: 'Gryffindor' },
+            score: 9,
+            submittedAt: new Date('2026-08-24T17:00:00.000Z')
+        }
+    ], {
+        now: new Date('2026-08-24T17:30:00.000Z'),
+        currentUserId: 'student-1'
+    });
+
+    assert.equal(response.resultsAvailable, false);
+    assert.equal(response.count, 0);
+    assert.deepEqual(response.data, []);
+    assert.equal(response.currentUserEntry, null);
+    assert.equal(response.resultsAvailableAt, exam.endTime);
+});
+
+test('exam leaderboard gives equal scores the same rank', () => {
+    const leaderboard = _private.buildExamLeaderboard([
+        {
+            student: { _id: 'student-1', name: 'First', house: 'Gryffindor' },
+            score: 8,
+            submittedAt: new Date('2026-08-24T17:03:00.000Z')
+        },
+        {
+            student: { _id: 'student-2', name: 'Second', house: 'Ravenclaw' },
+            score: 8,
+            submittedAt: new Date('2026-08-24T17:01:00.000Z')
+        },
+        {
+            student: { _id: 'student-3', name: 'Third', house: 'Hufflepuff' },
+            score: 6,
+            submittedAt: new Date('2026-08-24T17:02:00.000Z')
+        }
+    ]);
+
+    assert.deepEqual(leaderboard.map((entry) => entry.rank), [1, 1, 3]);
+    assert.deepEqual(leaderboard.map((entry) => entry.studentName), ['Second', 'First', 'Third']);
+});
+
+test('exam leaderboard eligibility rejects non-live and non-official exams', () => {
+    assert.equal(_private.isOfficialLiveExam({ isLiveExam: true, examType: 'official' }), true);
+    assert.equal(_private.isOfficialLiveExam({ isLiveExam: true }), true);
+    assert.equal(_private.isOfficialLiveExam({ isLiveExam: false, examType: 'official' }), false);
+    assert.equal(_private.isOfficialLiveExam({ isLiveExam: true, examType: 'assignment' }), false);
+    assert.equal(_private.isOfficialLiveExam({ isLiveExam: false, examType: 'generatedPractice' }), false);
+});
+
+test('exam leaderboard counts disqualified submissions as zero effective score', () => {
+    const leaderboard = _private.buildExamLeaderboard([
+        {
+            student: { _id: 'student-1', name: 'Disqualified Topper', house: 'Slytherin' },
+            score: 10,
+            isDisqualified: true,
+            submittedAt: new Date('2026-08-24T17:01:00.000Z')
+        },
+        {
+            student: { _id: 'student-2', name: 'Valid Student', house: 'Ravenclaw' },
+            score: 6,
+            submittedAt: new Date('2026-08-24T17:02:00.000Z')
+        }
+    ]);
+
+    assert.equal(leaderboard[0].studentName, 'Valid Student');
+    assert.equal(leaderboard[0].score, 6);
+    assert.equal(leaderboard[1].studentName, 'Disqualified Topper');
+    assert.equal(leaderboard[1].score, 0);
+    assert.equal(leaderboard[1].originalScore, 10);
+    assert.equal(leaderboard[1].isDisqualified, true);
+});
