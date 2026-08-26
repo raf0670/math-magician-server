@@ -966,6 +966,7 @@ function parsePassingMarks(value, totalMarks, errors) {
 
 function parseLiveExamPayload(body = {}, userId) {
     const title = clean(body.title);
+    const errors = [];
     const competitionCategory = normalizeCompetitionCategory(body.competitionCategory);
     const dailyWindow = competitionCategory === 'daily'
         ? getBangladeshDailyLiveExamWindow(body.examDate)
@@ -973,8 +974,7 @@ function parseLiveExamPayload(body = {}, userId) {
     const startTime = dailyWindow?.startTime || new Date(body.startTime);
     const endTime = dailyWindow?.endTime || new Date(body.endTime);
     const examDate = dailyWindow?.examDate || null;
-    const questions = Array.isArray(body.questions) ? body.questions : [];
-    const errors = [];
+    const questions = parseStrictJsonArray(body.questions, errors);
 
     if (!title) errors.push('Live exam title is required.');
     if (competitionCategory === 'daily') {
@@ -992,14 +992,18 @@ function parseLiveExamPayload(body = {}, userId) {
 
     const normalizedQuestions = questions.map((item, questionIndex) => {
         const subject = clean(item.subject);
-        const topic = clean(item.topic);
+        const topic = clean(item.topic || item.chapter);
+        const chapter = clean(item.chapter || item.topic);
         const subTopic = clean(item.subTopic);
         const difficulty = clean(item.difficulty) || 'Medium';
         const questionText = clean(item.question || item.questionText);
+        const instruction = clean(item.instruction);
         const explanation = clean(item.explanation);
         const rawOptions = Array.isArray(item.options) ? item.options.map(clean) : [];
         const options = rawOptions.map(normalizeLabeledOption);
         const correctAnswer = clean(item.correct_answer || item.correctAnswer);
+        const suppliedQuestionNo = Number(item.question_no || item.questionNo);
+        const questionNo = Number.isInteger(suppliedQuestionNo) && suppliedQuestionNo > 0 ? suppliedQuestionNo : questionIndex + 1;
 
         if (!subject) errors.push(`Question ${questionIndex + 1}: subject is required.`);
         if (!questionText) errors.push(`Question ${questionIndex + 1}: question text is required.`);
@@ -1019,8 +1023,9 @@ function parseLiveExamPayload(body = {}, userId) {
         }
 
         return {
-            questionNo: questionIndex + 1,
-            question_no: questionIndex + 1,
+            questionNo,
+            question_no: questionNo,
+            instruction,
             question: questionText,
             questionText,
             options,
@@ -1029,7 +1034,7 @@ function parseLiveExamPayload(body = {}, userId) {
             correct_answer: correctOptionIndex >= 0 ? options[correctOptionIndex] : correctAnswer,
             subject,
             difficulty,
-            chapter: topic,
+            chapter,
             topic,
             subTopic,
             explanation,

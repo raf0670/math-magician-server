@@ -202,6 +202,36 @@ test('daily live exam payload derives schedule from exam date and sets 15 minute
     assert.equal(payload.duration, 15);
 });
 
+test('live exam payload accepts assessment-style strict JSON questions', () => {
+    const { payload, errors } = _private.parseLiveExamPayload({
+        title: 'Daily Live Exam',
+        competitionCategory: 'daily',
+        examDate: '2026-08-25',
+        passingMarks: '',
+        questions: JSON.stringify([
+            {
+                subject: 'Maths',
+                question_no: 7,
+                instruction: 'Solve the math and choose which option is the perfect answer.',
+                question: '2 + 2 = ?',
+                options: ['A) 3', 'B) 4', 'C) 5', 'D) 6', 'E) None of these'],
+                correct_answer: 'B) 4',
+                explanation: '2 + 2 equals 4.'
+            }
+        ])
+    }, '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.duration, 15);
+    assert.equal(payload.passingMarks, 0);
+    assert.equal(payload.questions.length, 1);
+    assert.equal(payload.questions[0].question_no, 7);
+    assert.equal(payload.questions[0].instruction, 'Solve the math and choose which option is the perfect answer.');
+    assert.equal(payload.questions[0].correctOptionIndex, 1);
+    assert.equal(payload.questions[0].correct_answer, 'B) 4');
+    assert.equal(payload.questions[0].source, 'liveExam');
+});
+
 test('weekly live exam payload keeps manual start and end times', () => {
     const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
         competitionCategory: 'weekly',
@@ -223,6 +253,28 @@ test('daily live exam payload rejects invalid exam dates', () => {
     }), '507f1f77bcf86cd799439011');
 
     assert.ok(errors.includes('Please add a valid daily exam date in YYYY-MM-DD format.'));
+});
+
+test('live exam payload rejects non-array question JSON', () => {
+    const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        questions: JSON.stringify({
+            subject: 'Maths',
+            question: '2 + 2 = ?',
+            options: ['A) 3', 'B) 4', 'C) 5', 'D) 6', 'E) None of these'],
+            correct_answer: 'B) 4',
+            explanation: '2 + 2 equals 4.'
+        })
+    }), '507f1f77bcf86cd799439011');
+
+    assert.ok(errors.includes('questions must be a JSON array.'));
+});
+
+test('live exam payload rejects invalid question JSON', () => {
+    const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        questions: '[{'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.ok(errors.includes('questions must be valid strict JSON.'));
 });
 
 test('assignment payload accepts assessment-style strict JSON questions', () => {
