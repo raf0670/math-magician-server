@@ -5,6 +5,7 @@ const {
     createExam,
     createLiveExam,
     getAdminAssignments,
+    getAdminLiveExamPreview,
     getAdminLiveExams,
     getAllExams,
     getAssignments,
@@ -25,6 +26,7 @@ router.post('/practice/start', protect, authorizeApprovedAccess, startPracticeEx
 router.post('/quiz/start', protect, authorizeApprovedAccess, startQuizExam);
 router.get('/live', protect, authorizeApprovedAccess, getLiveExams);
 router.get('/live/admin', protect, authorizeAdmin, getAdminLiveExams);
+router.get('/live/admin/:id/preview', protect, authorizeAdmin, getAdminLiveExamPreview);
 router.post('/live/admin', protect, authorizeAdmin, createLiveExam);
 router.patch('/live/admin/:id', protect, authorizeAdmin, updateLiveExam);
 router.get('/assignments', protect, authorizeApprovedAccess, getAssignments);

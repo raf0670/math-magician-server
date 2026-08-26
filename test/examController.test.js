@@ -151,6 +151,22 @@ test('live exam summary hides score before end time and reveals it after', () =>
     assert.equal(endedSummary.submission.passingMarks, 0);
 });
 
+test('admin live exam preview includes answer data before the exam starts', () => {
+    const exam = buildLiveExam(new Date('2099-01-01T00:40:00.000Z'), {
+        startTime: new Date('2099-01-01T00:00:00.000Z')
+    });
+    const response = _private.buildAdminLiveExamPreviewResponse(exam, new Date('2098-12-31T23:00:00.000Z'));
+
+    assert.equal(response.adminPreview, true);
+    assert.equal(response.canSubmit, false);
+    assert.equal(response.canReview, true);
+    assert.equal(response.status, 'upcoming');
+    assert.equal(response.questionCount, 1);
+    assert.equal(response.questions[0].correctOptionIndex, 1);
+    assert.equal(response.questions[0].correctAnswer, '4');
+    assert.equal(response.questions[0].explanation, 'Basic addition.');
+});
+
 test('timer-expired live exam submissions are accepted inside the technical grace window', () => {
     const endTime = new Date('2026-08-16T16:30:00.000Z');
 

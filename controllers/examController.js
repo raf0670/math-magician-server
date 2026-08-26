@@ -915,6 +915,17 @@ async function attachStudentLiveSubmissionState(exam, studentId, now = new Date(
     };
 }
 
+function buildAdminLiveExamPreviewResponse(exam, now = new Date()) {
+    return {
+        ...exam,
+        status: getLiveExamStatus(exam, now),
+        questionCount: exam.questions?.length || 0,
+        adminPreview: true,
+        canSubmit: false,
+        canReview: true
+    };
+}
+
 function normalizeLabeledOption(option, index) {
     const text = clean(option);
     const label = OPTION_LABELS[index];
@@ -1557,6 +1568,38 @@ exports.getAdminLiveExams = async (req, res) => {
     }
 };
 
+// @desc    Preview a live exam with full answer data for admins
+// @route   GET /api/exams/live/admin/:id/preview
+// @access  Private/Admin
+exports.getAdminLiveExamPreview = async (req, res) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(404).json({ success: false, message: 'Live exam was not found.' });
+        }
+
+        const exam = await Exam.findOne({ _id: req.params.id, ...buildOfficialLiveExamFilter() })
+            .populate({
+                path: 'questions',
+                select: buildQuestionSelect(true)
+            })
+            .populate('createdBy', 'name email');
+
+        if (!exam) {
+            return res.status(404).json({ success: false, message: 'Live exam was not found.' });
+        }
+
+        const normalizedExam = await normalizePopulatedExam(exam);
+
+        res.status(200).json({
+            success: true,
+            data: buildAdminLiveExamPreviewResponse(normalizedExam)
+        });
+    } catch (error) {
+        logExamError('getAdminLiveExamPreview', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // @desc    Create a scheduled live exam and its authored questions
 // @route   POST /api/exams/live/admin
 // @access  Private/Admin
@@ -2010,6 +2053,7 @@ exports.submitExam = async (req, res) => {
 
 exports._private = {
     areLiveExamResultsAvailable,
+    buildAdminLiveExamPreviewResponse,
     buildAssignmentExamFilter,
     buildPendingLiveSubmissionResponse,
     buildPracticeQuestionSourceFilter,
