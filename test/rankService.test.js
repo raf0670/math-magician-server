@@ -73,7 +73,55 @@ test('failed live exam submissions still contribute their achieved score to rank
     };
 
     assert.equal(shouldCountExam(exam, new Date('2026-08-16T16:30:01.000Z')), true);
-    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 2);
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 1);
+});
+
+test('daily live exam rank points use a fixed twenty mark denominator', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'daily',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 10
+    };
+    const submission = {
+        exam,
+        score: 8
+    };
+
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 4);
+});
+
+test('daily live exam rank points are not capped at ten', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'daily',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 20
+    };
+    const submission = {
+        exam,
+        score: 25
+    };
+
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 12.5);
+});
+
+test('weekly live exam rank points scale to thirty points', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'weekly',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 40
+    };
+    const submission = {
+        exam,
+        score: 30
+    };
+
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 22.5);
 });
 
 test('completed assignment submission gives two rank points after deadline', () => {

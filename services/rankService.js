@@ -6,9 +6,10 @@ const { normalizeCompetitionCategory } = require('../config/competition');
 const RANK_TIERS = ['Silver', 'Gold', 'Platinum', 'Master', 'Challenger', 'Legendary'];
 const RANK_LEVELS = ['III', 'II', 'I'];
 const POINTS_PER_LEVEL = 20;
+const DAILY_LIVE_EXAM_RP_DENOMINATOR = 20;
 const CATEGORY_MAX_POINTS = {
     daily: 10,
-    weekly: 20
+    weekly: 30
 };
 const ASSIGNMENT_COMPLETE_POINTS = 2;
 const ASSIGNMENT_MISSING_POINTS = -5;
@@ -135,8 +136,10 @@ function getRankPointsForSubmission(submission, now = new Date()) {
 
     const category = normalizeCompetitionCategory(exam.competitionCategory);
     const maxPoints = CATEGORY_MAX_POINTS[category];
-    const totalMarks = Number(exam.totalMarks);
-    const scaledPoints = (getEffectiveScore(submission) / totalMarks) * maxPoints;
+    const denominator = category === 'daily'
+        ? DAILY_LIVE_EXAM_RP_DENOMINATOR
+        : Number(exam.totalMarks);
+    const scaledPoints = (getEffectiveScore(submission) / denominator) * maxPoints;
 
     return Number.isFinite(scaledPoints) ? scaledPoints : null;
 }
