@@ -7,8 +7,7 @@ const { getAreaBalancedQuizUnits, getQuestionEffectiveArea } = require('../utils
 const {
     DAILY_LIVE_EXAM_DURATION_MINUTES,
     calculateAssignmentDurationMinutes,
-    getBangladeshAssignmentWindow,
-    getBangladeshDailyLiveExamWindow
+    getBangladeshAssignmentWindow
 } = require('../utils/assignmentWindow');
 
 const SUBJECTS = ['Math', 'English', 'Analytical'];
@@ -77,6 +76,43 @@ function buildQuestionSelect(includeAnswers = false) {
 
 function clean(value) {
     return value?.toString().trim() || '';
+}
+
+function parseDateOnly(value) {
+    const rawDate = clean(value);
+    const match = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) return null;
+
+    const year = Number(match[1]);
+    const monthIndex = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const dateCheck = new Date(Date.UTC(year, monthIndex, day));
+
+    if (
+        dateCheck.getUTCFullYear() !== year
+        || dateCheck.getUTCMonth() !== monthIndex
+        || dateCheck.getUTCDate() !== day
+    ) {
+        return null;
+    }
+
+    return rawDate;
+}
+
+function getBangladeshDateString(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Dhaka',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(date);
+    const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+    return `${partMap.year}-${partMap.month}-${partMap.day}`;
 }
 
 function getLiveExamStatus(exam, now = new Date()) {
@@ -979,23 +1015,16 @@ function parseLiveExamPayload(body = {}, userId) {
     const title = clean(body.title);
     const errors = [];
     const competitionCategory = normalizeCompetitionCategory(body.competitionCategory);
-    const dailyWindow = competitionCategory === 'daily'
-        ? getBangladeshDailyLiveExamWindow(body.examDate)
+    const startTime = new Date(body.startTime);
+    const endTime = new Date(body.endTime);
+    const examDate = competitionCategory === 'daily'
+        ? (parseDateOnly(body.examDate) || getBangladeshDateString(startTime))
         : null;
-    const startTime = dailyWindow?.startTime || new Date(body.startTime);
-    const endTime = dailyWindow?.endTime || new Date(body.endTime);
-    const examDate = dailyWindow?.examDate || null;
     const questions = parseStrictJsonArray(body.questions, errors);
 
     if (!title) errors.push('Live exam title is required.');
-    if (competitionCategory === 'daily') {
-        if (!examDate || !startTime || !endTime || Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) {
-            errors.push('Please add a valid daily exam date in YYYY-MM-DD format.');
-        }
-    } else {
-        if (Number.isNaN(startTime.getTime())) errors.push('Please add a valid start time.');
-        if (Number.isNaN(endTime.getTime())) errors.push('Please add a valid end time.');
-    }
+    if (Number.isNaN(startTime.getTime())) errors.push('Please add a valid start time.');
+    if (Number.isNaN(endTime.getTime())) errors.push('Please add a valid end time.');
     if (startTime && endTime && !Number.isNaN(startTime.getTime()) && !Number.isNaN(endTime.getTime()) && endTime <= startTime) {
         errors.push('Live exam end time must be after the start time.');
     }
@@ -2060,7 +2089,6 @@ exports._private = {
     buildLiveExamResultStatus,
     buildStudentSubmissionResponse,
     getBangladeshAssignmentWindow,
-    getBangladeshDailyLiveExamWindow,
     getDefaultPassingMarks,
     getEffectivePassingMarks,
     isTimerExpiredSubmissionInsideGrace,

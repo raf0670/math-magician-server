@@ -41,6 +41,8 @@ function buildLiveExamPayload(overrides = {}) {
         title: 'Daily Live Exam',
         competitionCategory: 'daily',
         examDate: '2026-08-25',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:30:00.000Z',
         questions: [
             {
                 subject: 'Maths',
@@ -197,25 +199,40 @@ test('assignment date converts to a 4pm Bangladesh window in UTC', () => {
     assert.equal(window.endTime.toISOString(), '2026-08-25T09:59:59.999Z');
 });
 
-test('daily live exam date converts to a 10:40pm Bangladesh window in UTC', () => {
-    const window = _private.getBangladeshDailyLiveExamWindow('2026-08-25');
-
-    assert.equal(window.examDate, '2026-08-25');
-    assert.equal(window.startTime.toISOString(), '2026-08-25T16:40:00.000Z');
-    assert.equal(window.endTime.toISOString(), '2026-08-25T17:20:00.000Z');
-});
-
-test('daily live exam payload derives schedule from exam date and sets 15 minute duration', () => {
+test('daily live exam payload keeps admin-defined schedule and sets 15 minute duration', () => {
     const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
-        startTime: '1999-01-01T00:00:00.000Z',
-        endTime: '1999-01-01T01:00:00.000Z'
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T16:00:00.000Z'
     }), '507f1f77bcf86cd799439011');
 
     assert.deepEqual(errors, []);
     assert.equal(payload.examDate, '2026-08-25');
-    assert.equal(payload.startTime.toISOString(), '2026-08-25T16:40:00.000Z');
-    assert.equal(payload.endTime.toISOString(), '2026-08-25T17:20:00.000Z');
+    assert.equal(payload.startTime.toISOString(), '2026-08-25T14:00:00.000Z');
+    assert.equal(payload.endTime.toISOString(), '2026-08-25T16:00:00.000Z');
     assert.equal(payload.duration, 15);
+});
+
+test('daily live exam payload derives exam date from Bangladesh start date when omitted', () => {
+    const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        examDate: '',
+        startTime: '2026-08-25T18:30:00.000Z',
+        endTime: '2026-08-25T19:00:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.examDate, '2026-08-26');
+    assert.equal(payload.duration, 15);
+});
+
+test('daily live exam payload ignores invalid exam date metadata and derives it from start time', () => {
+    const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        examDate: '2026-02-31',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:30:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.examDate, '2026-08-25');
 });
 
 test('live exam payload accepts assessment-style strict JSON questions', () => {
@@ -223,6 +240,8 @@ test('live exam payload accepts assessment-style strict JSON questions', () => {
         title: 'Daily Live Exam',
         competitionCategory: 'daily',
         examDate: '2026-08-25',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:30:00.000Z',
         passingMarks: '',
         questions: JSON.stringify([
             {
@@ -263,12 +282,23 @@ test('weekly live exam payload keeps manual start and end times', () => {
     assert.equal(payload.duration, 90);
 });
 
-test('daily live exam payload rejects invalid exam dates', () => {
+test('daily live exam payload rejects missing or invalid schedule times', () => {
     const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
-        examDate: '2026-02-31'
+        startTime: '',
+        endTime: 'not-a-date'
     }), '507f1f77bcf86cd799439011');
 
-    assert.ok(errors.includes('Please add a valid daily exam date in YYYY-MM-DD format.'));
+    assert.ok(errors.includes('Please add a valid start time.'));
+    assert.ok(errors.includes('Please add a valid end time.'));
+});
+
+test('daily live exam payload rejects end times before start times', () => {
+    const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        startTime: '2026-08-25T15:30:00.000Z',
+        endTime: '2026-08-25T14:00:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.ok(errors.includes('Live exam end time must be after the start time.'));
 });
 
 test('live exam payload rejects non-array question JSON', () => {
