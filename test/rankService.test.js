@@ -124,6 +124,48 @@ test('weekly live exam rank points scale to thirty points', () => {
     assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 22.5);
 });
 
+test('retake submissions do not count for rank points', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'weekly',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 40
+    };
+    const submission = {
+        exam,
+        score: 40,
+        isRetake: true
+    };
+
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), null);
+});
+
+test('retake submissions do not increment counted exam totals', () => {
+    const exam = {
+        examType: 'assessment',
+        isLiveExam: true,
+        startTime: new Date('2026-08-16T15:00:00.000Z'),
+        totalMarks: 60
+    };
+    const totals = _private.buildRankTotalsFromSubmissions([
+        {
+            student: 'student-1',
+            exam,
+            score: 42,
+            isRetake: false
+        },
+        {
+            student: 'student-1',
+            exam,
+            score: 60,
+            isRetake: true
+        }
+    ], ['student-1'], { now: new Date('2026-08-16T17:00:00.000Z') });
+
+    assert.deepEqual(totals.get('student-1'), { points: 42, countedExamCount: 1 });
+});
+
 test('completed assignment submission gives two rank points after deadline', () => {
     const exam = {
         examType: 'assignment',
@@ -234,4 +276,17 @@ test('submitted daily live exams do not receive missing-exam penalties', () => {
     );
 
     assert.deepEqual(totals.get('student-1'), { points: 7, countedExamCount: 1 });
+});
+
+test('retake-only daily live exams still receive missing-exam penalties', () => {
+    const totals = new Map([['student-1', { points: 0, countedExamCount: 0 }]]);
+
+    _private.applyMissingPenaltiesForEligibleStudents(
+        totals,
+        [{ student: 'student-1', exam: { _id: 'daily-exam-1' }, isRetake: true }],
+        ['student-1'],
+        [{ _id: 'daily-exam-1', penalty: -5 }]
+    );
+
+    assert.deepEqual(totals.get('student-1'), { points: -5, countedExamCount: 1 });
 });

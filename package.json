@@ -11,6 +11,7 @@
     "dev": "node server.js",
     "backfill:houses": "node scripts/backfillHouses.js",
     "backfill:assignment-windows": "node scripts/backfillAssignmentWindows.js",
+    "enable:retakes": "node scripts/enableRetakes.js",
     "test": "node --test"
   },
   "keywords": [],

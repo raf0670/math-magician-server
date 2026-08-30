@@ -27,6 +27,21 @@ const SubmissionSchema = new mongoose.Schema({
         default: 'manual',
         index: true
     },
+    isRetake: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    attemptNumber: {
+        type: Number,
+        default: 1,
+        min: 1,
+        index: true
+    },
+    clientAttemptId: {
+        type: String,
+        trim: true
+    },
     isDisqualified: {
         type: Boolean,
         default: false,
@@ -60,9 +75,24 @@ const SubmissionSchema = new mongoose.Schema({
     }
 });
 
-SubmissionSchema.index({ student: 1, exam: 1 }, { unique: true });
+SubmissionSchema.index(
+    { student: 1, exam: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { isRetake: false },
+        name: 'unique_official_submission_per_student_exam'
+    }
+);
+SubmissionSchema.index(
+    { student: 1, exam: 1, clientAttemptId: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { clientAttemptId: { $type: 'string' } },
+        name: 'unique_client_attempt_submission'
+    }
+);
 
 // Optimize leaderboard-style queries for a specific exam.
-SubmissionSchema.index({ exam: 1, score: -1 });
+SubmissionSchema.index({ exam: 1, isRetake: 1, score: -1 });
 
 module.exports = mongoose.model('Submission', SubmissionSchema);

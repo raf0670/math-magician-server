@@ -196,6 +196,49 @@ function normalizeSubmissionReason(value) {
     return SUBMISSION_REASONS.has(reason) ? reason : 'manual';
 }
 
+function normalizeClientAttemptId(value) {
+    const clientAttemptId = clean(value);
+    return clientAttemptId ? clientAttemptId.slice(0, 120) : '';
+}
+
+function parseBooleanFlag(value) {
+    return value === true || value === 'true' || value === '1' || value === 1;
+}
+
+function buildOfficialSubmissionQuery(studentId, examId) {
+    return {
+        student: studentId,
+        exam: examId,
+        isRetake: { $ne: true }
+    };
+}
+
+function canRetakeExam(exam, now = new Date()) {
+    return Boolean(
+        exam?.allowRetakes
+        && isOfficialLiveExam(exam)
+        && areLiveExamResultsAvailable(exam, now)
+    );
+}
+
+async function buildRetakeSubmissionPayload(studentId, examId, answers, score, submissionReason, clientAttemptId) {
+    const attemptCount = await Submission.countDocuments({
+        student: studentId,
+        exam: examId
+    });
+
+    return {
+        student: studentId,
+        exam: examId,
+        answers,
+        score,
+        submissionReason,
+        isRetake: true,
+        attemptNumber: Math.max(2, attemptCount + 1),
+        ...(clientAttemptId ? { clientAttemptId } : {})
+    };
+}
+
 function normalizeSubject(subject = '') {
     const rawSubject = subject == null ? '' : subject.toString().trim();
     const cleaned = rawSubject.toLowerCase();
@@ -888,6 +931,8 @@ function buildSubmissionResponse(submission, normalizedExam, options = {}) {
         answers: submission.answers || [],
         submissionReason: normalizeSubmissionReason(submission.submissionReason),
         submissionId: submission._id,
+        isRetake: Boolean(submission.isRetake),
+        attemptNumber: Number(submission.attemptNumber || (submission.isRetake ? 2 : 1)),
         alreadySubmitted: Boolean(options.alreadySubmitted),
         ...liveExamStatus
     };
@@ -904,6 +949,8 @@ function buildPendingLiveSubmissionResponse(submission, normalizedExam, options 
         submittedAt: submission.submittedAt,
         submissionId: submission._id,
         submissionReason: normalizeSubmissionReason(submission.submissionReason),
+        isRetake: Boolean(submission.isRetake),
+        attemptNumber: Number(submission.attemptNumber || (submission.isRetake ? 2 : 1)),
         alreadySubmitted: Boolean(options.alreadySubmitted),
         resultsAvailable: false,
         resultsAvailableAt: normalizedExam.endTime
@@ -930,10 +977,7 @@ function buildStudentSubmissionResponse(submission, normalizedExam, options = {}
 async function attachStudentLiveSubmissionState(exam, studentId, now = new Date()) {
     if (!exam || !studentId) return exam;
 
-    const submission = await Submission.findOne({
-        student: studentId,
-        exam: exam._id
-    }).lean();
+    const submission = await Submission.findOne(buildOfficialSubmissionQuery(studentId, exam._id)).lean();
 
     if (!submission) return exam;
 
@@ -1124,6 +1168,8 @@ function serializeExamSummary(exam, submissionByExamId = new Map(), existingQues
         missingQuestionCount: Math.max(0, questionIds.length - questionCount),
         negativeMarksPerQuestion: getEffectiveNegativeMarksPerQuestion(plainExam.negativeMarksPerQuestion),
         passingMarks: getEffectivePassingMarks(plainExam),
+        allowRetakes: Boolean(plainExam.allowRetakes),
+        canRetake: canRetakeExam(plainExam),
         hasSubmitted: Boolean(submission),
         resultsAvailable,
         resultsAvailableAt: plainExam.endTime || null,
@@ -1550,7 +1596,8 @@ exports.getLiveExams = async (req, res) => {
         const examIds = exams.map((exam) => exam._id);
         const submissions = await Submission.find({
             student: req.user.id,
-            exam: { $in: examIds }
+            exam: { $in: examIds },
+            isRetake: { $ne: true }
         })
             .select('exam score submittedAt')
             .lean();
@@ -1650,7 +1697,7 @@ exports.createLiveExam = async (req, res) => {
             negativeMarksPerQuestion: 0.25,
             examType: 'official',
             competitionCategory: payload.competitionCategory,
-            allowRetakes: false,
+            allowRetakes: true,
             isLiveExam: true,
             startTime: payload.startTime,
             endTime: payload.endTime,
@@ -1706,7 +1753,7 @@ exports.updateLiveExam = async (req, res) => {
                 negativeMarksPerQuestion: 0.25,
                 examType: 'official',
                 competitionCategory: payload.competitionCategory,
-                allowRetakes: false,
+                allowRetakes: true,
                 isLiveExam: true,
                 startTime: payload.startTime,
                 endTime: payload.endTime,
@@ -1747,7 +1794,8 @@ exports.getAssignments = async (req, res) => {
         const examIds = exams.map((exam) => exam._id);
         const submissions = await Submission.find({
             student: req.user.id,
-            exam: { $in: examIds }
+            exam: { $in: examIds },
+            isRetake: { $ne: true }
         })
             .select('exam score submittedAt answers')
             .lean();
@@ -1947,9 +1995,25 @@ exports.getExam = async (req, res) => {
             }
 
             const includeAnswers = currentTime >= endTime;
-            const responseExam = includeAnswers
-                ? await attachStudentLiveSubmissionState(liveExam, req.user?._id || req.user?.id, currentTime)
-                : await attachStudentLiveSubmissionState(redactExamForStudent(liveExam), req.user?._id || req.user?.id, currentTime);
+            const wantsRetake = parseBooleanFlag(req.query?.retake);
+            const retakeAvailable = canRetakeExam(liveExam, currentTime);
+            if (wantsRetake && !retakeAvailable) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Retakes are available only after official live exam results unlock.'
+                });
+            }
+
+            const responseExam = wantsRetake && retakeAvailable
+                ? {
+                    ...redactExamForStudent(liveExam),
+                    canRetake: true,
+                    isRetakeMode: true,
+                    hasSubmitted: false
+                }
+                : includeAnswers
+                    ? await attachStudentLiveSubmissionState(liveExam, req.user?._id || req.user?.id, currentTime)
+                    : await attachStudentLiveSubmissionState(redactExamForStudent(liveExam), req.user?._id || req.user?.id, currentTime);
 
             return res.status(200).json({
                 success: true,
@@ -1986,6 +2050,8 @@ exports.submitExam = async (req, res) => {
 
         const { answers } = req.body; // e.g. [0, 2, 1, 3]
         const submissionReason = normalizeSubmissionReason(req.body.submissionReason);
+        const wantsRetake = parseBooleanFlag(req.body.isRetake);
+        const clientAttemptId = normalizeClientAttemptId(req.body.clientAttemptId);
         if (!Array.isArray(answers)) {
             return res.status(400).json({ success: false, message: 'Please submit answers as an array of selected option indexes.' });
         }
@@ -2013,19 +2079,37 @@ exports.submitExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam not found' });
         }
 
-        if (!normalizedExam.allowRetakes) {
-            const existingSubmission = await Submission.findOne({
+        const now = new Date();
+        const isRetake = wantsRetake && canRetakeExam(normalizedExam, now);
+        if (wantsRetake && !isRetake) {
+            return res.status(403).json({
+                success: false,
+                message: 'Retakes are available only after official live exam results unlock.'
+            });
+        }
+
+        if (isRetake && clientAttemptId) {
+            const existingRetake = await Submission.findOne({
                 student: studentId,
-                exam: normalizedExam._id
+                exam: normalizedExam._id,
+                clientAttemptId
             });
 
+            if (existingRetake) {
+                return res.status(200).json(buildStudentSubmissionResponse(existingRetake, normalizedExam, { alreadySubmitted: true, now }));
+            }
+        }
+
+        if (!isRetake) {
+            const existingSubmission = await Submission.findOne(buildOfficialSubmissionQuery(studentId, normalizedExam._id));
+
             if (existingSubmission) {
-                return res.status(200).json(buildStudentSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
+                return res.status(200).json(buildStudentSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true, now }));
             }
         }
 
         if (normalizedExam.isLiveExam) {
-            const currentTime = new Date();
+            const currentTime = now;
             const startTime = new Date(normalizedExam.startTime);
             const endTime = new Date(normalizedExam.endTime);
 
@@ -2036,7 +2120,7 @@ exports.submitExam = async (req, res) => {
                 });
             }
 
-            if (currentTime >= endTime && !isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, currentTime)) {
+            if (!isRetake && currentTime >= endTime && !isTimerExpiredSubmissionInsideGrace(submissionReason, endTime, currentTime)) {
                 return res.status(403).json({
                     success: false,
                     message: 'The submission portal has closed! You missed the official live exam deadline.'
@@ -2053,25 +2137,33 @@ exports.submitExam = async (req, res) => {
         const graded = gradeAnswers(normalizedExam, answers);
 
         try {
-            const submission = await Submission.create({
-                student: studentId,
-                exam: normalizedExam._id,
-                answers,
-                score: graded.score,
-                submissionReason
-            });
+            const submissionPayload = isRetake
+                ? await buildRetakeSubmissionPayload(studentId, normalizedExam._id, answers, graded.score, submissionReason, clientAttemptId)
+                : {
+                    student: studentId,
+                    exam: normalizedExam._id,
+                    answers,
+                    score: graded.score,
+                    submissionReason,
+                    isRetake: false,
+                    attemptNumber: 1
+                };
+            const submission = await Submission.create(submissionPayload);
 
-            return res.status(201).json(buildStudentSubmissionResponse(submission, normalizedExam));
+            return res.status(201).json(buildStudentSubmissionResponse(submission, normalizedExam, { now }));
         } catch (error) {
             if (error.code !== 11000) throw error;
 
-            const existingSubmission = await Submission.findOne({
-                student: studentId,
-                exam: normalizedExam._id
-            });
+            const existingSubmission = isRetake && clientAttemptId
+                ? await Submission.findOne({
+                    student: studentId,
+                    exam: normalizedExam._id,
+                    clientAttemptId
+                })
+                : await Submission.findOne(buildOfficialSubmissionQuery(studentId, normalizedExam._id));
 
             if (!existingSubmission) throw error;
-            return res.status(200).json(buildStudentSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true }));
+            return res.status(200).json(buildStudentSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true, now }));
         }
 
     } catch (error) {
@@ -2084,8 +2176,10 @@ exports._private = {
     areLiveExamResultsAvailable,
     buildAdminLiveExamPreviewResponse,
     buildAssignmentExamFilter,
+    buildOfficialSubmissionQuery,
     buildPendingLiveSubmissionResponse,
     buildPracticeQuestionSourceFilter,
+    canRetakeExam,
     buildLiveExamResultStatus,
     buildStudentSubmissionResponse,
     getBangladeshAssignmentWindow,

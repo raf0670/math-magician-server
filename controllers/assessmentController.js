@@ -42,10 +42,31 @@ function normalizeSubmissionReason(value) {
     return SUBMISSION_REASONS.has(reason) ? reason : 'manual';
 }
 
+function normalizeClientAttemptId(value) {
+    const clientAttemptId = clean(value);
+    return clientAttemptId ? clientAttemptId.slice(0, 120) : '';
+}
+
+function parseBooleanFlag(value) {
+    return value === true || value === 'true' || value === '1' || value === 1;
+}
+
+function buildOfficialSubmissionQuery(studentId, examId) {
+    return {
+        student: studentId,
+        exam: examId,
+        isRetake: { $ne: true }
+    };
+}
+
 function getAssessmentStatus(now = new Date()) {
     if (now < ASSESSMENT_START_TIME) return 'upcoming';
     if (now <= ASSESSMENT_END_TIME) return 'open';
     return 'ended';
+}
+
+function canRetakeAssessment(exam, status) {
+    return Boolean(exam?.allowRetakes && status === 'ended');
 }
 
 function isTimerExpiredSubmissionInsideGrace(submissionReason, now = new Date()) {
@@ -189,7 +210,7 @@ async function syncAssessmentExamShell(questionSet) {
                 examCode: ASSESSMENT_EXAM_CODE,
                 questionSource: 'AssessmentTest',
                 competitionCategory: 'daily',
-                allowRetakes: false,
+                allowRetakes: true,
                 isLiveExam: true,
                 startTime: ASSESSMENT_START_TIME,
                 endTime: ASSESSMENT_END_TIME
@@ -295,8 +316,28 @@ function buildSubmissionResponse(submission, exam, options = {}) {
         answers: submission.answers || [],
         submissionReason: normalizeSubmissionReason(submission.submissionReason),
         submissionId: submission._id,
+        isRetake: Boolean(submission.isRetake),
+        attemptNumber: Number(submission.attemptNumber || (submission.isRetake ? 2 : 1)),
         alreadySubmitted: Boolean(options.alreadySubmitted),
         rankInfo: options.rankInfo || null
+    };
+}
+
+async function buildRetakeSubmissionPayload(studentId, examId, answers, score, submissionReason, clientAttemptId) {
+    const attemptCount = await Submission.countDocuments({
+        student: studentId,
+        exam: examId
+    });
+
+    return {
+        student: studentId,
+        exam: examId,
+        answers,
+        score,
+        submissionReason,
+        isRetake: true,
+        attemptNumber: Math.max(2, attemptCount + 1),
+        ...(clientAttemptId ? { clientAttemptId } : {})
     };
 }
 
@@ -311,10 +352,7 @@ exports.getAssessmentSummary = async (req, res) => {
     try {
         const now = new Date();
         const { exam, questionSet, status } = await getAssessmentContext(now);
-        const submission = await Submission.findOne({
-            student: req.user.id,
-            exam: exam._id
-        })
+        const submission = await Submission.findOne(buildOfficialSubmissionQuery(req.user.id, exam._id))
             .select('score submittedAt')
             .lean();
 
@@ -330,6 +368,7 @@ exports.getAssessmentSummary = async (req, res) => {
                 isLiveExam: true,
                 startTime: exam.startTime,
                 endTime: exam.endTime,
+                allowRetakes: Boolean(exam.allowRetakes),
                 status,
                 questionCount: questionSet.validQuestions.length,
                 rawQuestionCount: questionSet.rawQuestionCount,
@@ -345,7 +384,8 @@ exports.getAssessmentSummary = async (req, res) => {
                 canPreview: false,
                 canEnter: status === 'open' || status === 'ended',
                 canSubmit: status === 'open',
-                canReview: status === 'ended'
+                canReview: status === 'ended',
+                canRetake: canRetakeAssessment(exam, status)
             }
         });
     } catch (error) {
@@ -374,22 +414,30 @@ exports.getAssessmentExam = async (req, res) => {
             });
         }
 
-        const existingSubmission = await Submission.findOne({
-            student: req.user.id,
-            exam: exam._id
-        })
+        const wantsRetake = parseBooleanFlag(req.query?.retake);
+        const retakeAvailable = canRetakeAssessment(exam, status);
+        if (wantsRetake && !retakeAvailable) {
+            return res.status(403).json({
+                success: false,
+                message: 'Retakes are available only after assessment results unlock.'
+            });
+        }
+
+        const existingSubmission = await Submission.findOne(buildOfficialSubmissionQuery(req.user.id, exam._id))
             .select('_id')
             .lean();
 
-        const includeAnswers = status === 'ended';
+        const includeAnswers = status === 'ended' && !(wantsRetake && retakeAvailable);
 
         res.status(200).json({
             success: true,
             data: {
                 ...buildAssessmentExamPayload(exam, questionSet, { includeAnswers, assessmentMode: 'exam' }),
-                hasSubmitted: Boolean(existingSubmission),
-                canSubmit: status === 'open',
-                canReview: status === 'ended'
+                hasSubmitted: wantsRetake && retakeAvailable ? false : Boolean(existingSubmission),
+                canSubmit: status === 'open' || (wantsRetake && retakeAvailable),
+                canReview: status === 'ended' && !(wantsRetake && retakeAvailable),
+                canRetake: retakeAvailable,
+                isRetakeMode: wantsRetake && retakeAvailable
             }
         });
     } catch (error) {
@@ -403,6 +451,8 @@ exports.submitAssessmentExam = async (req, res) => {
         const studentId = req.user?._id || req.user?.id;
         const { answers } = req.body;
         const submissionReason = normalizeSubmissionReason(req.body.submissionReason);
+        const wantsRetake = parseBooleanFlag(req.body.isRetake);
+        const clientAttemptId = normalizeClientAttemptId(req.body.clientAttemptId);
 
         if (!studentId) {
             return res.status(401).json({ success: false, message: 'Not authorized, please log in again before submitting.' });
@@ -414,6 +464,7 @@ exports.submitAssessmentExam = async (req, res) => {
 
         const now = new Date();
         const { exam, questionSet, status } = await getAssessmentContext(now);
+        const isRetake = wantsRetake && canRetakeAssessment(exam, status);
 
         if (!questionSet.validQuestions.length) {
             return res.status(400).json({
@@ -429,18 +480,35 @@ exports.submitAssessmentExam = async (req, res) => {
             });
         }
 
-        const normalizedExam = buildAssessmentExamPayload(exam, questionSet, { includeAnswers: true });
-        const existingSubmission = await Submission.findOne({
-            student: studentId,
-            exam: normalizedExam._id
-        });
+        if (wantsRetake && !isRetake) {
+            return res.status(403).json({
+                success: false,
+                message: 'Retakes are available only after assessment results unlock.'
+            });
+        }
 
-        if (existingSubmission) {
+        const normalizedExam = buildAssessmentExamPayload(exam, questionSet, { includeAnswers: true });
+        if (isRetake && clientAttemptId) {
+            const existingRetake = await Submission.findOne({
+                student: studentId,
+                exam: normalizedExam._id,
+                clientAttemptId
+            });
+
+            if (existingRetake) {
+                const rankInfo = await getRankInfoByStudentId(studentId);
+                return res.status(200).json(buildSubmissionResponse(existingRetake, normalizedExam, { alreadySubmitted: true, rankInfo }));
+            }
+        }
+
+        const existingSubmission = await Submission.findOne(buildOfficialSubmissionQuery(studentId, normalizedExam._id));
+
+        if (!isRetake && existingSubmission) {
             const rankInfo = await getRankInfoByStudentId(studentId);
             return res.status(200).json(buildSubmissionResponse(existingSubmission, normalizedExam, { alreadySubmitted: true, rankInfo }));
         }
 
-        if (status === 'ended' && !isTimerExpiredSubmissionInsideGrace(submissionReason, now)) {
+        if (!isRetake && status === 'ended' && !isTimerExpiredSubmissionInsideGrace(submissionReason, now)) {
             return res.status(403).json({
                 success: false,
                 message: 'The assessment test submission portal has closed.'
@@ -450,23 +518,31 @@ exports.submitAssessmentExam = async (req, res) => {
         const graded = gradeAnswers(normalizedExam, answers);
 
         try {
-            const submission = await Submission.create({
-                student: studentId,
-                exam: normalizedExam._id,
-                answers,
-                score: graded.score,
-                submissionReason
-            });
+            const submissionPayload = isRetake
+                ? await buildRetakeSubmissionPayload(studentId, normalizedExam._id, answers, graded.score, submissionReason, clientAttemptId)
+                : {
+                    student: studentId,
+                    exam: normalizedExam._id,
+                    answers,
+                    score: graded.score,
+                    submissionReason,
+                    isRetake: false,
+                    attemptNumber: 1
+                };
+            const submission = await Submission.create(submissionPayload);
 
             const rankInfo = await getRankInfoByStudentId(studentId);
             return res.status(201).json(buildSubmissionResponse(submission, normalizedExam, { rankInfo }));
         } catch (error) {
             if (error.code !== 11000) throw error;
 
-            const duplicateSubmission = await Submission.findOne({
-                student: studentId,
-                exam: normalizedExam._id
-            });
+            const duplicateSubmission = isRetake && clientAttemptId
+                ? await Submission.findOne({
+                    student: studentId,
+                    exam: normalizedExam._id,
+                    clientAttemptId
+                })
+                : await Submission.findOne(buildOfficialSubmissionQuery(studentId, normalizedExam._id));
 
             if (!duplicateSubmission) throw error;
             const rankInfo = await getRankInfoByStudentId(studentId);
@@ -477,4 +553,11 @@ exports.submitAssessmentExam = async (req, res) => {
         const status = error instanceof mongoose.Error.ValidationError ? 400 : 500;
         res.status(status).json({ success: false, message: error.message });
     }
+};
+
+exports._private = {
+    buildOfficialSubmissionQuery,
+    buildSubmissionResponse,
+    canRetakeAssessment,
+    getAssessmentStatus
 };

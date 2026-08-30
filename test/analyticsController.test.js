@@ -133,6 +133,38 @@ test('exam leaderboard gives equal scores the same rank', () => {
     assert.deepEqual(leaderboard.map((entry) => entry.studentName), ['Second', 'First', 'Third']);
 });
 
+test('exam leaderboard excludes retake submissions', () => {
+    const leaderboard = _private.buildExamLeaderboard([
+        {
+            student: { _id: 'student-1', name: 'Official Student', house: 'Gryffindor' },
+            score: 7,
+            isRetake: false,
+            submittedAt: new Date('2026-08-24T17:01:00.000Z')
+        },
+        {
+            student: { _id: 'student-1', name: 'Official Student', house: 'Gryffindor' },
+            score: 10,
+            isRetake: true,
+            submittedAt: new Date('2026-08-24T18:01:00.000Z')
+        },
+        {
+            student: { _id: 'student-2', name: 'Retake Only', house: 'Ravenclaw' },
+            score: 10,
+            isRetake: true,
+            submittedAt: new Date('2026-08-24T18:02:00.000Z')
+        }
+    ]);
+
+    assert.equal(leaderboard.length, 1);
+    assert.equal(leaderboard[0].studentName, 'Official Student');
+    assert.equal(leaderboard[0].score, 7);
+});
+
+test('retake submissions have zero effective analytics contribution', () => {
+    assert.equal(_private.getEffectiveScore({ score: 10, isRetake: true }), 0);
+    assert.equal(_private.getEffectiveScore({ score: 10, isRetake: false }), 10);
+});
+
 test('exam leaderboard eligibility rejects non-live and non-official exams', () => {
     assert.equal(_private.isOfficialLiveExam({ isLiveExam: true, examType: 'official' }), true);
     assert.equal(_private.isOfficialLiveExam({ isLiveExam: true }), true);

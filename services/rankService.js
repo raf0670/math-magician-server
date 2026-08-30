@@ -69,6 +69,10 @@ function getEffectiveScore(submission) {
     return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
 }
 
+function isRetakeSubmission(submission) {
+    return Boolean(submission?.isRetake);
+}
+
 function shouldPenalizeMissingDailyLiveExam(exam, now = new Date()) {
     if (!exam?.isLiveExam) return false;
     if (exam.examType && exam.examType !== 'official') return false;
@@ -121,6 +125,8 @@ function isCompleteAssignmentSubmission(submission) {
 }
 
 function getRankPointsForSubmission(submission, now = new Date()) {
+    if (isRetakeSubmission(submission)) return null;
+
     const exam = submission?.exam;
     if (!shouldCountExam(exam, now)) return null;
 
@@ -186,6 +192,7 @@ function applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions
 
     const submittedKeys = new Set(
         submissions
+            .filter((submission) => !isRetakeSubmission(submission))
             .map((submission) => {
                 const studentId = getStudentId(submission.student);
                 const examId = getExamId(submission.exam);
@@ -282,9 +289,12 @@ module.exports = {
     getMissingAssignmentRankPoints,
     getRankPointsForSubmission,
     isCompleteAssignmentSubmission,
+    isRetakeSubmission,
     shouldCountExam,
     _private: {
         applyMissingPenaltiesForEligibleStudents,
+        buildRankTotalsFromSubmissions,
+        isRetakeSubmission,
         shouldPenalizeMissingDailyLiveExam
     }
 };

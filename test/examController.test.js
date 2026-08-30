@@ -95,6 +95,39 @@ test('ended official live exam submission response includes full scorecard data'
     assert.equal(response.review[0].correctAnswer, '4');
 });
 
+test('ended official live exam retake response is marked as non-official attempt data', () => {
+    const exam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        allowRetakes: true
+    });
+    const response = _private.buildStudentSubmissionResponse(buildSubmission({
+        isRetake: true,
+        attemptNumber: 2
+    }), exam);
+
+    assert.equal(response.resultsAvailable, true);
+    assert.equal(response.isRetake, true);
+    assert.equal(response.attemptNumber, 2);
+    assert.equal(response.score, 1);
+    assert.deepEqual(response.answers, [1]);
+});
+
+test('live exam retakes are available only after results unlock', () => {
+    const openExam = buildLiveExam(new Date('2099-01-01T00:00:00.000Z'), {
+        allowRetakes: true,
+        startTime: new Date('2000-01-01T00:00:00.000Z')
+    });
+    const endedExam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        allowRetakes: true
+    });
+    const endedWithoutRetakes = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        allowRetakes: false
+    });
+
+    assert.equal(_private.canRetakeExam(openExam, new Date('2026-08-16T16:00:00.000Z')), false);
+    assert.equal(_private.canRetakeExam(endedExam, new Date('2026-08-16T16:00:00.000Z')), true);
+    assert.equal(_private.canRetakeExam(endedWithoutRetakes, new Date('2026-08-16T16:00:00.000Z')), false);
+});
+
 test('ended official live exam submission response includes default pass status', () => {
     const exam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
         totalMarks: 10

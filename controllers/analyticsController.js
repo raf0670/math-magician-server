@@ -36,7 +36,15 @@ function buildCompetitionExamFilter() {
 }
 
 function getEffectiveScore(submission) {
-    return submission?.isDisqualified ? 0 : Number(submission?.score || 0);
+    return submission?.isDisqualified || submission?.isRetake ? 0 : Number(submission?.score || 0);
+}
+
+function isRetakeSubmission(submission) {
+    return Boolean(submission?.isRetake);
+}
+
+function getOfficialSubmissions(submissions = []) {
+    return submissions.filter((submission) => !isRetakeSubmission(submission));
 }
 
 function isOfficialLiveExam(exam) {
@@ -101,7 +109,7 @@ function buildExamLeaderboard(submissions = []) {
     let previousScore = null;
     let previousRank = 0;
 
-    return submissions
+    return getOfficialSubmissions(submissions)
         .map((submission) => ({
             studentId: getStudentId(submission.student),
             studentName: submission.student?.name || 'Student',
@@ -164,7 +172,7 @@ async function getCompetitionData() {
         .lean();
     const examIds = exams.map((exam) => exam._id);
     const submissions = examIds.length
-        ? await Submission.find({ exam: { $in: examIds } })
+        ? await Submission.find({ exam: { $in: examIds }, isRetake: { $ne: true } })
             .populate('student', 'name email house')
             .populate('exam', 'title totalMarks competitionCategory examType isLiveExam startTime endTime')
             .sort({ submittedAt: 1 })
@@ -345,7 +353,7 @@ exports.getStudentStats = async (req, res) => {
             .populate('exam', 'title totalMarks duration examType competitionCategory isLiveExam startTime endTime')
             .sort({ submittedAt: -1 })
             .lean();
-        const visibleHistory = history.filter((item) => isSubmissionResultAvailable(item));
+        const visibleHistory = history.filter((item) => !isRetakeSubmission(item) && isSubmissionResultAvailable(item));
 
         if (visibleHistory.length === 0) {
             return res.status(200).json({
@@ -410,7 +418,7 @@ exports.getExamLeaderboard = async (req, res) => {
 
         const submissions = isPendingDelayedResultExam(exam)
             ? []
-            : await Submission.find({ exam: examId })
+            : await Submission.find({ exam: examId, isRetake: { $ne: true } })
                 .populate('student', 'name house')
                 .sort({ score: -1, submittedAt: 1 })
                 .lean();
@@ -526,7 +534,11 @@ exports._private = {
     buildExamLeaderboard,
     buildExamLeaderboardResponse,
     buildCompetitionExamFilter,
+    getCompetitionData,
+    getEffectiveScore,
+    getOfficialSubmissions,
     buildOfficialExamFilter,
+    isRetakeSubmission,
     isOfficialLiveExam,
     isPendingOfficialLiveExam: isPendingDelayedResultExam,
     isPendingDelayedResultExam,
