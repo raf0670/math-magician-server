@@ -120,11 +120,11 @@ async function sendPasswordResetEmail({ to, name, resetUrl, expiresInMinutes }) 
 
     await sendEmail({
         to,
-        subject: 'Reset your Exam Archive password',
+        subject: 'Reset your Magician\'s School password',
         text: [
             `Hi ${displayName},`,
             '',
-            'We received a request to reset your Exam Archive password.',
+            'We received a request to reset your Magician\'s School password.',
             `Open this secure link within ${expiresInMinutes} minutes to set a new password:`,
             resetUrl,
             '',
@@ -133,7 +133,7 @@ async function sendPasswordResetEmail({ to, name, resetUrl, expiresInMinutes }) 
         html: `
             <div style="font-family:Arial,sans-serif;line-height:1.6;color:#16131f;">
                 <p>Hi ${safeDisplayName},</p>
-                <p>We received a request to reset your Exam Archive password.</p>
+                <p>We received a request to reset your Magician&#039;s School password.</p>
                 <p>
                     <a href="${safeResetUrl}" style="display:inline-block;background:#DFB15B;color:#000;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">
                         Reset password
@@ -153,21 +153,21 @@ async function sendPaymentConfirmedEmail({ to, name, planTitle }) {
 
     await sendEmail({
         to,
-        subject: 'Payment confirmed - Exam Archive access unlocked',
+        subject: 'Payment confirmed - Magician\'s School access unlocked',
         text: [
             `Hi ${displayName},`,
             '',
             'Your payment has been confirmed.',
-            `You now have full access to everything included in ${planTitle || 'your Exam Archive enrollment'}.`,
+            `You now have full access to everything included in ${planTitle || 'your Magician\'s School enrollment'}.`,
             '',
-            'Thank you for enrolling with Exam Archive.'
+            'Thank you for enrolling with Magician\'s School.'
         ].join('\n'),
         html: `
             <div style="font-family:Arial,sans-serif;line-height:1.6;color:#16131f;">
                 <p>Hi ${safeDisplayName},</p>
                 <p>Your payment has been confirmed.</p>
                 <p>You now have full access to everything included in <strong>${safePlanTitle}</strong>.</p>
-                <p>Thank you for enrolling with Exam Archive.</p>
+                <p>Thank you for enrolling with Magician&#039;s School.</p>
             </div>
         `
     });
