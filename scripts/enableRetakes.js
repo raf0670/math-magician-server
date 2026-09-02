@@ -10,6 +10,22 @@ dotenv.config();
 
 const ASSESSMENT_EXAM_CODE = 'assessment-test-2026-08-16';
 const isDryRun = process.argv.includes('--dry-run');
+const RETAKE_ENABLED_EXAM_FILTER = {
+    $or: [
+        {
+            isLiveExam: true,
+            $or: [
+                { examType: 'official' },
+                { examType: { $exists: false } },
+                { examType: 'assignment' }
+            ]
+        },
+        {
+            examType: 'assessment',
+            examCode: ASSESSMENT_EXAM_CODE
+        }
+    ]
+};
 
 async function dropIndexIfExists(collection, indexName) {
     const indexes = await collection.indexes();
@@ -40,24 +56,12 @@ async function main() {
     };
     const submissionsToBackfill = await Submission.countDocuments(missingRetakeFilter);
     const examsToEnable = await Exam.countDocuments({
-        $or: [
-            {
-                isLiveExam: true,
-                $or: [
-                    { examType: 'official' },
-                    { examType: { $exists: false } }
-                ]
-            },
-            {
-                examType: 'assessment',
-                examCode: ASSESSMENT_EXAM_CODE
-            }
-        ],
+        ...RETAKE_ENABLED_EXAM_FILTER,
         allowRetakes: { $ne: true }
     });
 
     console.log(`${isDryRun ? 'Would backfill' : 'Backfilling'} ${submissionsToBackfill} submission${submissionsToBackfill === 1 ? '' : 's'} as official attempts.`);
-    console.log(`${isDryRun ? 'Would enable' : 'Enabling'} retakes on ${examsToEnable} live/assessment exam${examsToEnable === 1 ? '' : 's'}.`);
+    console.log(`${isDryRun ? 'Would enable' : 'Enabling'} retakes on ${examsToEnable} live/assessment/assignment exam${examsToEnable === 1 ? '' : 's'}.`);
 
     if (!isDryRun) {
         await Submission.updateMany(missingRetakeFilter, {
@@ -67,24 +71,7 @@ async function main() {
             }
         });
 
-        await Exam.updateMany(
-            {
-                isLiveExam: true,
-                $or: [
-                    { examType: 'official' },
-                    { examType: { $exists: false } }
-                ]
-            },
-            { $set: { allowRetakes: true } }
-        );
-
-        await Exam.updateMany(
-            {
-                examType: 'assessment',
-                examCode: ASSESSMENT_EXAM_CODE
-            },
-            { $set: { allowRetakes: true } }
-        );
+        await Exam.updateMany(RETAKE_ENABLED_EXAM_FILTER, { $set: { allowRetakes: true } });
     }
 
     const droppedLegacyIndex = await dropIndexIfExists(submissionCollection, 'student_1_exam_1');

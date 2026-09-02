@@ -290,3 +290,16 @@ test('retake-only daily live exams still receive missing-exam penalties', () => 
 
     assert.deepEqual(totals.get('student-1'), { points: -5, countedExamCount: 1 });
 });
+
+test('retake-only assignments still receive missing-assignment penalties', () => {
+    const totals = new Map([['student-1', { points: 0, countedExamCount: 0 }]]);
+
+    _private.applyMissingPenaltiesForEligibleStudents(
+        totals,
+        [{ student: 'student-1', exam: { _id: 'assignment-1' }, isRetake: true }],
+        ['student-1'],
+        [{ _id: 'assignment-1', penalty: -5 }]
+    );
+
+    assert.deepEqual(totals.get('student-1'), { points: -5, countedExamCount: 1 });
+});

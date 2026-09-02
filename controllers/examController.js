@@ -216,7 +216,7 @@ function buildOfficialSubmissionQuery(studentId, examId) {
 function canRetakeExam(exam, now = new Date()) {
     return Boolean(
         exam?.allowRetakes
-        && isOfficialLiveExam(exam)
+        && (isOfficialLiveExam(exam) || isAssignmentExam(exam))
         && areLiveExamResultsAvailable(exam, now)
     );
 }
@@ -1864,7 +1864,7 @@ exports.createAssignment = async (req, res) => {
             examType: ASSIGNMENT_EXAM_TYPE,
             questionSource: 'QuestionBank',
             competitionCategory: 'daily',
-            allowRetakes: false,
+            allowRetakes: true,
             isLiveExam: true,
             startTime: payload.startTime,
             endTime: payload.endTime,
@@ -1921,7 +1921,7 @@ exports.updateAssignment = async (req, res) => {
                 examType: ASSIGNMENT_EXAM_TYPE,
                 questionSource: 'QuestionBank',
                 competitionCategory: 'daily',
-                allowRetakes: false,
+                allowRetakes: true,
                 isLiveExam: true,
                 startTime: payload.startTime,
                 endTime: payload.endTime,
@@ -2000,7 +2000,9 @@ exports.getExam = async (req, res) => {
             if (wantsRetake && !retakeAvailable) {
                 return res.status(403).json({
                     success: false,
-                    message: 'Retakes are available only after official live exam results unlock.'
+                    message: isAssignmentExam(liveExam)
+                        ? 'Retakes are available only after the assignment deadline.'
+                        : 'Retakes are available only after official live exam results unlock.'
                 });
             }
 
@@ -2084,7 +2086,9 @@ exports.submitExam = async (req, res) => {
         if (wantsRetake && !isRetake) {
             return res.status(403).json({
                 success: false,
-                message: 'Retakes are available only after official live exam results unlock.'
+                message: isAssignmentExam(normalizedExam)
+                    ? 'Retakes are available only after the assignment deadline.'
+                    : 'Retakes are available only after official live exam results unlock.'
             });
         }
 

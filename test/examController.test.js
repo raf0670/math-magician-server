@@ -128,6 +128,37 @@ test('live exam retakes are available only after results unlock', () => {
     assert.equal(_private.canRetakeExam(endedWithoutRetakes, new Date('2026-08-16T16:00:00.000Z')), false);
 });
 
+test('assignment retakes are available only after the assignment deadline', () => {
+    const openAssignment = buildLiveExam(new Date('2099-01-01T00:00:00.000Z'), {
+        examType: 'assignment',
+        allowRetakes: true,
+        startTime: new Date('2000-01-01T00:00:00.000Z')
+    });
+    const endedAssignment = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        examType: 'assignment',
+        allowRetakes: true
+    });
+    const endedWithoutRetakes = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        examType: 'assignment',
+        allowRetakes: false
+    });
+
+    assert.equal(_private.canRetakeExam(openAssignment, new Date('2026-08-16T16:00:00.000Z')), false);
+    assert.equal(_private.canRetakeExam(endedAssignment, new Date('2026-08-16T16:00:00.000Z')), true);
+    assert.equal(_private.canRetakeExam(endedWithoutRetakes, new Date('2026-08-16T16:00:00.000Z')), false);
+});
+
+test('ended assignment summary exposes retake availability', () => {
+    const assignment = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
+        examType: 'assignment',
+        allowRetakes: true
+    });
+    const summary = _private.serializeExamSummary(assignment);
+
+    assert.equal(summary.canRetake, true);
+    assert.equal(summary.allowRetakes, true);
+});
+
 test('ended official live exam submission response includes default pass status', () => {
     const exam = buildLiveExam(new Date('2000-01-01T00:00:00.000Z'), {
         totalMarks: 10
