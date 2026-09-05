@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { COMPETITION_CATEGORIES } = require('../config/competition');
 
 const ExamSchema = new mongoose.Schema({
+    program: { type: String, enum: ['general', 'math'], default: 'general', index: true },
     title: {
         type: String,
         required: [true, 'Please add an exam title'],

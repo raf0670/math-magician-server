@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { createCourse, getAllCourses, enrollInCourse, updateCourse } = require('../controllers/courseController');
-const { protect, authorizeAdmin } = require('../middleware/auth');
+const { protect, authorizeAdmin, authorizeApprovedAccess } = require('../middleware/auth');
 
 // Public route for any student to browse courses
-router.get('/', getAllCourses);
+router.get('/', protect, authorizeApprovedAccess, getAllCourses);
 
 // Protected admin-only route to create courses
 router.post('/', protect, authorizeAdmin, createCourse);

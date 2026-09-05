@@ -59,6 +59,11 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    hasMathAccess: { type: Boolean, default: false, index: true },
+    mathPaymentStatus: { type: String, enum: ['unpaid', 'fullyPaid'], default: 'unpaid' },
+    mathAccessStartsAt: { type: Date, default: null },
+    generalAccessStartsAt: { type: Date, default: null },
+    mathCheckoutLockUntil: { type: Date, select: false },
     hasBooked: {
         type: Boolean,
         default: false,

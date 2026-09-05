@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const LiveClassSchema = new mongoose.Schema({
+    program: { type: String, enum: ['general', 'math'], default: 'general', index: true },
     title: {
         type: String,
         required: [true, 'Please add a class title'],

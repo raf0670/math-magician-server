@@ -1,6 +1,8 @@
+const { programFilter, programOf } = require('../config/programs');
 const Submission = require('../models/Submission');
 const Exam = require('../models/Exam');
 const QuestionBank = require('../models/QuestionBank');
+const User = require('../models/User');
 const mongoose = require('mongoose');
 const { HOUSES, HOUSE_META, normalizeCompetitionCategory, normalizeHouse } = require('../config/competition');
 const { getDefaultRankInfo, getRankInfoByStudentId, getRankInfoByStudentIds } = require('../services/rankService');
@@ -113,7 +115,7 @@ function buildExamLeaderboard(submissions = []) {
         .map((submission) => ({
             studentId: getStudentId(submission.student),
             studentName: submission.student?.name || 'Student',
-            house: normalizeHouse(submission.student?.house) || '',
+            house: programOf(submission.exam?.program) === 'math' ? '' : normalizeHouse(submission.student?.house) || '',
             score: getEffectiveScore(submission),
             originalScore: Number(submission.score || 0),
             isDisqualified: Boolean(submission.isDisqualified),
@@ -164,17 +166,17 @@ function buildExamLeaderboardResponse(exam, submissions = [], options = {}) {
     };
 }
 
-async function getCompetitionData() {
+async function getCompetitionData(program = 'general') {
     const now = new Date();
-    const exams = await Exam.find(buildCompetitionExamFilter())
-        .select('title totalMarks duration competitionCategory examType isLiveExam startTime endTime createdAt')
+    const exams = await Exam.find({ ...buildCompetitionExamFilter(), ...programFilter(program) })
+        .select('program title totalMarks duration competitionCategory examType isLiveExam startTime endTime createdAt')
         .sort({ startTime: 1, createdAt: 1 })
         .lean();
     const examIds = exams.map((exam) => exam._id);
     const submissions = examIds.length
         ? await Submission.find({ exam: { $in: examIds }, isRetake: { $ne: true } })
             .populate('student', 'name email house')
-            .populate('exam', 'title totalMarks competitionCategory examType isLiveExam startTime endTime')
+            .populate('exam', 'program title totalMarks competitionCategory examType isLiveExam startTime endTime')
             .sort({ submittedAt: 1 })
             .lean()
         : [];
@@ -185,6 +187,17 @@ async function getCompetitionData() {
     const badges = [];
     const houseResultsByHouse = new Map(HOUSES.map((house) => [house, []]));
 
+    if (program === 'math') {
+        const enrollees = await User.find({ role: 'student', hasMathAccess: true }).select('name').lean();
+        for (const student of enrollees) {
+            const entry = formatStudent(student);
+            leaderboardByStudentId.set(entry.studentId, {
+                ...entry, house: '', email: '', totalScore: 0, examsTaken: 0,
+                bestScore: 0, lastSubmittedAt: null, disqualifiedCount: 0
+            });
+        }
+    }
+
     for (const submission of finalizedSubmissions) {
         const student = formatStudent(submission.student);
         if (!student?.studentId) continue;
@@ -192,6 +205,7 @@ async function getCompetitionData() {
         const effectiveScore = getEffectiveScore(submission);
         const existing = leaderboardByStudentId.get(student.studentId) || {
             ...student,
+            ...(program === 'math' ? { house: '', email: '' } : {}),
             totalScore: 0,
             examsTaken: 0,
             bestScore: 0,
@@ -222,7 +236,7 @@ async function getCompetitionData() {
             ? []
             : validSubmissions
                 .filter((submission) => Number(submission.score || 0) === highestScore)
-                .map((submission) => formatStudent(submission.student))
+                .map((submission) => ({ ...formatStudent(submission.student), ...(program === 'math' ? { house: '', email: '' } : {}) }))
                 .filter(Boolean);
 
         if (winners.length) {
@@ -239,7 +253,7 @@ async function getCompetitionData() {
             }
         }
 
-        for (const house of HOUSES) {
+        for (const house of (program === 'math' ? [] : HOUSES)) {
             const houseSubmissions = examSubmissions.filter((submission) => normalizeHouse(submission.student?.house) === house);
             const totalScore = houseSubmissions.reduce((sum, submission) => sum + getEffectiveScore(submission), 0);
             const participantCount = houseSubmissions.length;
@@ -256,7 +270,7 @@ async function getCompetitionData() {
         }
     }
 
-    const rankInfoByStudentId = await getRankInfoByStudentIds([...leaderboardByStudentId.keys()], { now });
+    const rankInfoByStudentId = await getRankInfoByStudentIds([...leaderboardByStudentId.keys()], { now, program });
 
     const leaderboard = [...leaderboardByStudentId.values()]
         .map((entry) => ({
@@ -269,7 +283,7 @@ async function getCompetitionData() {
         .sort(sortCompetitionEntries)
         .map((entry, index) => ({ ...entry, rank: index + 1 }));
 
-    const houseStandings = HOUSES.map((house) => {
+    const houseStandings = (program === 'math' ? [] : HOUSES).map((house) => {
         const examResults = houseResultsByHouse.get(house) || [];
         const totalPoints = examResults.reduce((sum, item) => sum + item.points, 0);
 
@@ -292,7 +306,7 @@ async function getCompetitionData() {
         houseStandings,
         badges,
         champions: {
-            houses: HOUSES.map((house) => ({
+            houses: (program === 'math' ? [] : HOUSES).map((house) => ({
                 house,
                 champion: leaderboard.find((entry) => entry.house === house) || null
             })),
@@ -303,7 +317,7 @@ async function getCompetitionData() {
 
 exports.getGlobalLeaderboard = async (req, res) => {
     try {
-        const { leaderboard } = await getCompetitionData();
+        const { leaderboard } = await getCompetitionData(req.program);
         const currentUserId = req.user._id?.toString() || req.user.id?.toString();
         const currentUserEntry = leaderboard.find((entry) => entry.studentId === currentUserId) || null;
 
@@ -321,7 +335,7 @@ exports.getGlobalLeaderboard = async (req, res) => {
 
 exports.getCompetitionSummary = async (req, res) => {
     try {
-        const data = await getCompetitionData();
+        const data = await getCompetitionData(req.program);
         const currentUserId = req.user._id?.toString() || req.user.id?.toString();
         const currentUserEntry = data.leaderboard.find((entry) => entry.studentId === currentUserId) || null;
 
@@ -343,17 +357,18 @@ exports.getCompetitionSummary = async (req, res) => {
 
 exports.getStudentStats = async (req, res) => {
     try {
+        const program = programOf(req.program);
         const [questionBankCount, availableExamCount, rankInfo] = await Promise.all([
-            QuestionBank.countDocuments(),
-            Exam.countDocuments(buildOfficialExamFilter()),
-            getRankInfoByStudentId(req.user.id)
+            program === 'math' ? Promise.resolve(0) : QuestionBank.countDocuments(),
+            Exam.countDocuments({ ...buildOfficialExamFilter(), ...programFilter(program) }),
+            getRankInfoByStudentId(req.user.id, { program })
         ]);
 
         const history = await Submission.find({ student: req.user.id })
-            .populate('exam', 'title totalMarks duration examType competitionCategory isLiveExam startTime endTime')
+            .populate('exam', 'program title totalMarks duration examType competitionCategory isLiveExam startTime endTime')
             .sort({ submittedAt: -1 })
             .lean();
-        const visibleHistory = history.filter((item) => !isRetakeSubmission(item) && isSubmissionResultAvailable(item));
+        const visibleHistory = history.filter((item) => programOf(item.exam?.program) === program && !isRetakeSubmission(item) && isSubmissionResultAvailable(item));
 
         if (visibleHistory.length === 0) {
             return res.status(200).json({
@@ -410,7 +425,7 @@ exports.getExamLeaderboard = async (req, res) => {
         }
 
         const exam = await Exam.findById(examId)
-            .select('title totalMarks competitionCategory examType isLiveExam startTime endTime')
+            .select('program title totalMarks competitionCategory examType isLiveExam startTime endTime')
             .lean();
         if (!exam || !isOfficialLiveExam(exam)) {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
@@ -423,7 +438,7 @@ exports.getExamLeaderboard = async (req, res) => {
                 .sort({ score: -1, submittedAt: 1 })
                 .lean();
 
-        res.status(200).json(buildExamLeaderboardResponse(exam, submissions, {
+        res.status(200).json(buildExamLeaderboardResponse(exam, programOf(exam.program) === 'math' ? submissions.map(s => ({ ...s, student: { ...s.student, house: '' } })) : submissions, {
             currentUserId: req.user?._id || req.user?.id
         }));
     } catch (error) {
@@ -439,7 +454,7 @@ exports.getAdminExamSubmissions = async (req, res) => {
         }
 
         const exam = await Exam.findOne({ _id: examId, isLiveExam: true })
-            .select('title competitionCategory startTime endTime')
+            .select('program title competitionCategory startTime endTime')
             .lean();
         if (!exam) {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
@@ -452,7 +467,7 @@ exports.getAdminExamSubmissions = async (req, res) => {
             .sort({ score: -1, submittedAt: 1 })
             .lean();
         const rankInfoByStudentId = await getRankInfoByStudentIds(
-            submissions.map((submission) => getStudentId(submission.student))
+            submissions.map((submission) => getStudentId(submission.student)), { program: programOf(exam.program) }
         );
 
         res.status(200).json({
@@ -514,7 +529,8 @@ exports.updateSubmissionModeration = async (req, res) => {
             .populate('disqualifiedBy', 'name email')
             .populate('reinstatedBy', 'name email')
             .lean();
-        const rankInfo = await getRankInfoByStudentId(getStudentId(updatedSubmission.student));
+        const exam = await Exam.findById(submission.exam).select('program').lean();
+        const rankInfo = await getRankInfoByStudentId(getStudentId(updatedSubmission.student), { program: programOf(exam?.program) });
 
         res.status(200).json({
             success: true,

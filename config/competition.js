@@ -24,10 +24,10 @@ const HOUSE_META = {
     },
     Slytherin: {
         name: 'Slytherin',
-        planId: 'mathAdvanced',
-        preferredBatch: 'Math Advanced',
-        mode: 'Advanced',
-        location: 'Coming Soon'
+        planId: 'mathSlytherin',
+        preferredBatch: 'Slytherin',
+        mode: 'Online',
+        location: 'Full Website Access'
     }
 };
 
@@ -36,7 +36,9 @@ const PLAN_TO_HOUSE = {
     gryffindor2: 'Gryffindor',
     online: 'Hufflepuff',
     premium: 'Ravenclaw',
-    mathAdvanced: 'Slytherin'
+    mathAdvanced: 'Slytherin',
+    mathSlytherin: 'Slytherin',
+    slytherinUpgrade: 'Slytherin'
 };
 
 const BATCH_TO_HOUSE = {
@@ -44,7 +46,8 @@ const BATCH_TO_HOUSE = {
     'Farmgate - Gryffindor 2.0': 'Gryffindor',
     'Bailey Road': 'Hufflepuff',
     Online: 'Ravenclaw',
-    'Math Advanced': 'Slytherin'
+    'Math Advanced': 'Slytherin',
+    Slytherin: 'Slytherin'
 };
 
 const COMPETITION_CATEGORIES = ['daily', 'weekly'];

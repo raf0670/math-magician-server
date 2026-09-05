@@ -1,10 +1,13 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const Payment = require('../models/Payment');
+const { syncProgramAccess } = require('../services/programAccessService');
+const { canAccessProgram, programOf } = require('../config/programs');
+const Exam = require('../models/Exam');
+const mongoose = require('mongoose');
 
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS) || 30000;
-const APPROVED_ACCESS_STATUSES = ['approved', 'paid'];
 const authUserCache = new Map();
+exports.invalidateAuthUser = (userId) => authUserCache.delete(userId.toString());
 
 function getCachedUser(userId) {
     const cached = authUserCache.get(userId);
@@ -47,7 +50,7 @@ exports.protect = async (req, res, next) => {
             if (!req.user) {
                 // Fetch only request-scoped auth fields to reduce DB work during live-exam bursts.
                 const user = await User.findById(decoded.id)
-                    .select('name email role house bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus')
+                    .select('name email role house bio hasClassAccess hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
                     .lean();
 
                 if (user) {
@@ -80,44 +83,32 @@ exports.authorizeAdmin = (req, res, next) => {
     }
 };
 
-exports.authorizeApprovedAccess = async (req, res, next) => {
+async function ensureProgramAccess(req, res, next, program) {
     try {
-        const user = req.user;
-
-        if (user?.role === 'admin' || user?.hasClassAccess) {
-            return next();
-        }
-
-        const approvedPayments = await Payment.find({
-            user: user._id,
-            status: { $in: APPROVED_ACCESS_STATUSES }
-        }).select('paymentChoice remainingAmount fullyPaidAt').lean();
-
-        if (approvedPayments.length) {
-            const hasFullyPaid = approvedPayments.some((payment) => {
-                const paymentChoice = payment.paymentChoice || 'full';
-                return paymentChoice === 'full'
-                    || payment.remainingAmount === 0
-                    || Boolean(payment.fullyPaidAt);
-            });
-            const paymentStatus = hasFullyPaid ? 'fullyPaid' : 'partiallyPaid';
-
-            await User.findByIdAndUpdate(user._id, {
-                hasClassAccess: true,
-                paymentStatus
-            });
-            req.user = {
-                ...user,
-                hasClassAccess: true,
-                paymentStatus
-            };
-            return next();
-        }
-
-        return res.status(403).json({
-            success: false,
-            message: 'This section unlocks after admin approval.'
-        });
+        if (canAccessProgram(req.user, program)) return next();
+        const access = await syncProgramAccess(req.user._id);
+        req.user = { ...req.user, ...access };
+        if (canAccessProgram(req.user, program)) return next();
+        return res.status(403).json({ success: false, message: program === 'math' ? 'Enroll in the Math Course to open this section.' : 'This section requires full website access.' });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+}
+exports.authorizeApprovedAccess = (req, res, next) => ensureProgramAccess(req, res, next, 'general');
+exports.authorizeProgramAccess = (req, res, next) => {
+    const program = req.query.program || 'general';
+    if (!['general', 'math'].includes(program)) return res.status(400).json({ success: false, message: 'Invalid program.' });
+    req.program = program;
+    return ensureProgramAccess(req, res, next, program);
+};
+exports.authorizeExamAccess = async (req, res, next) => {
+    try {
+        const id = req.params.id || req.params.examId;
+        if (!mongoose.Types.ObjectId.isValid(id)) return res.status(404).json({ success: false, message: 'Exam not found.' });
+        const exam = await Exam.findById(id).select('program').lean();
+        if (!exam) return res.status(404).json({ success: false, message: 'Exam not found.' });
+        req.program = programOf(exam.program);
+        return ensureProgramAccess(req, res, next, req.program);
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }

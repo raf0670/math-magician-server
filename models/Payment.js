@@ -33,6 +33,10 @@ const PaymentSchema = new mongoose.Schema({
         required: true,
         min: 1
     },
+    originalAmount: { type: Number },
+    discountAmount: { type: Number, default: 0 },
+    discountType: { type: String, enum: ['none', 'existingHouse', 'coupon'], default: 'none' },
+    couponCode: { type: String, default: '' },
     paymentChoice: {
         type: String,
         enum: ['full', 'partial'],

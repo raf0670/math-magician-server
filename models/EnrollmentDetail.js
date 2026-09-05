@@ -1,8 +1,13 @@
 const mongoose = require('mongoose');
+const { PREPARATION_METHODS, MATH_WEAKNESSES } = require('../config/programs');
 
 const BACKUP_CHOICES = ['IBA JU', 'BUP BBA Gen', 'BUP FBS', 'DU B/C unit', 'Engineering', 'Medical', 'DU A unit', 'Private Uni', 'Abroad'];
 
 const EnrollmentDetailSchema = new mongoose.Schema({
+    preparationMethods: [{ type: String, enum: PREPARATION_METHODS }],
+    mathFear: { type: String, trim: true, maxlength: 5000 },
+    mathWeaknesses: [{ type: String, enum: MATH_WEAKNESSES }],
+    mathWeaknessOther: { type: String, trim: true, maxlength: 2000 },
     user: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -133,7 +138,7 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     preferredBatch: {
         type: String,
         required: true,
-        enum: ['Farmgate', 'Farmgate - Gryffindor 2.0', 'Bailey Road', 'Online']
+        enum: ['Farmgate', 'Farmgate - Gryffindor 2.0', 'Bailey Road', 'Online', 'Math Course', 'Slytherin']
     }
 }, { timestamps: true });
 

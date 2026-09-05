@@ -1,3 +1,4 @@
+const { programFilter, programOf } = require('../config/programs');
 const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
 const QuestionBank = require('../models/QuestionBank');
@@ -34,6 +35,7 @@ const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
 
 function buildOfficialExamFilter() {
     return {
+        ...programFilter(),
         $and: [
             {
                 $or: [
@@ -52,8 +54,9 @@ function buildOfficialExamFilter() {
     };
 }
 
-function buildOfficialLiveExamFilter() {
+function buildOfficialLiveExamFilter(program = 'general') {
     return {
+        ...programFilter(program),
         isLiveExam: true,
         $or: [
             { examType: 'official' },
@@ -64,6 +67,7 @@ function buildOfficialLiveExamFilter() {
 
 function buildAssignmentExamFilter() {
     return {
+        ...programFilter(),
         isLiveExam: true,
         examType: ASSIGNMENT_EXAM_TYPE
     };
@@ -1059,6 +1063,8 @@ function parseLiveExamPayload(body = {}, userId) {
     const title = clean(body.title);
     const errors = [];
     const competitionCategory = normalizeCompetitionCategory(body.competitionCategory);
+    const program = programOf(body.program);
+    if (body.program && !['general', 'math'].includes(body.program)) errors.push('Invalid program.');
     const startTime = new Date(body.startTime);
     const endTime = new Date(body.endTime);
     const examDate = competitionCategory === 'daily'
@@ -1090,6 +1096,7 @@ function parseLiveExamPayload(body = {}, userId) {
         const questionNo = Number.isInteger(suppliedQuestionNo) && suppliedQuestionNo > 0 ? suppliedQuestionNo : questionIndex + 1;
 
         if (!subject) errors.push(`Question ${questionIndex + 1}: subject is required.`);
+        if (program === 'math' && !/^(math|maths|mathematics)$/i.test(subject)) errors.push(`Question ${questionIndex + 1}: Math exams accept math questions only.`);
         if (!questionText) errors.push(`Question ${questionIndex + 1}: question text is required.`);
         if (!explanation) errors.push(`Question ${questionIndex + 1}: explanation is required.`);
         if (rawOptions.length !== 5 || rawOptions.some((option) => !option)) {
@@ -1132,6 +1139,7 @@ function parseLiveExamPayload(body = {}, userId) {
     return {
         payload: {
             title,
+            program,
             competitionCategory,
             startTime,
             endTime,
@@ -1298,7 +1306,7 @@ exports.getAllExams = async (req, res) => {
     try {
         const exams = await Exam.find(buildOfficialExamFilter())
             .sort({ createdAt: -1 })
-            .select('title duration totalMarks negativeMarksPerQuestion examType allowRetakes isLiveExam startTime endTime questions createdAt');
+            .select('program title duration totalMarks negativeMarksPerQuestion examType allowRetakes isLiveExam startTime endTime questions createdAt');
 
         const data = exams.map((exam) => ({
             ...exam.toObject(),
@@ -1588,9 +1596,9 @@ exports.startQuizExam = async (req, res) => {
 // @access  Private
 exports.getLiveExams = async (req, res) => {
     try {
-        const exams = await Exam.find(buildOfficialLiveExamFilter())
+        const exams = await Exam.find(buildOfficialLiveExamFilter(req.query.program))
             .sort({ startTime: -1 })
-            .select('title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime examDate questions createdAt createdBy')
+            .select('program title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime examDate questions createdAt createdBy')
             .lean();
 
         const examIds = exams.map((exam) => exam._id);
@@ -1623,7 +1631,7 @@ exports.getLiveExams = async (req, res) => {
 // @access  Private/Admin
 exports.getAdminLiveExams = async (req, res) => {
     try {
-        const exams = await Exam.find(buildOfficialLiveExamFilter())
+        const exams = await Exam.find(buildOfficialLiveExamFilter(req.query.program))
             .sort({ startTime: -1 })
             .populate({
                 path: 'questions',
@@ -1653,7 +1661,7 @@ exports.getAdminLiveExamPreview = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
         }
 
-        const exam = await Exam.findOne({ _id: req.params.id, ...buildOfficialLiveExamFilter() })
+        const exam = await Exam.findOne({ _id: req.params.id, ...buildOfficialLiveExamFilter(req.query.program) })
             .populate({
                 path: 'questions',
                 select: buildQuestionSelect(true)
@@ -1681,7 +1689,7 @@ exports.getAdminLiveExamPreview = async (req, res) => {
 // @access  Private/Admin
 exports.createLiveExam = async (req, res) => {
     try {
-        const { payload, errors } = parseLiveExamPayload(req.body, req.user._id);
+        const { payload, errors } = parseLiveExamPayload({ ...req.body, program: req.query.program || 'general' }, req.user._id);
 
         if (errors.length) {
             return res.status(400).json({ success: false, message: errors[0], errors });
@@ -1689,6 +1697,7 @@ exports.createLiveExam = async (req, res) => {
 
         const questions = await QuestionBank.insertMany(payload.questions, { ordered: true });
         const exam = await Exam.create({
+            program: payload.program || 'general',
             title: payload.title,
             questions: questions.map((question) => question._id),
             duration: payload.duration,
@@ -1730,12 +1739,12 @@ exports.updateLiveExam = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
         }
 
-        const existingExam = await Exam.findOne({ _id: req.params.id, ...buildOfficialLiveExamFilter() });
+        const existingExam = await Exam.findOne({ _id: req.params.id, ...buildOfficialLiveExamFilter(req.query.program) });
         if (!existingExam) {
             return res.status(404).json({ success: false, message: 'Live exam was not found.' });
         }
 
-        const { payload, errors } = parseLiveExamPayload(req.body, req.user._id);
+        const { payload, errors } = parseLiveExamPayload({ ...req.body, program: req.query.program || 'general' }, req.user._id);
         if (errors.length) {
             return res.status(400).json({ success: false, message: errors[0], errors });
         }
@@ -1745,7 +1754,8 @@ exports.updateLiveExam = async (req, res) => {
         const updatedExam = await Exam.findByIdAndUpdate(
             existingExam._id,
             {
-                title: payload.title,
+                program: payload.program || 'general',
+            title: payload.title,
                 questions: questions.map((question) => question._id),
                 duration: payload.duration,
                 totalMarks: questions.length,
@@ -1788,7 +1798,7 @@ exports.getAssignments = async (req, res) => {
     try {
         const exams = await Exam.find(buildAssignmentExamFilter())
             .sort({ startTime: -1 })
-            .select('title duration totalMarks negativeMarksPerQuestion examType assignmentDate allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
+            .select('program title duration totalMarks negativeMarksPerQuestion examType assignmentDate allowRetakes isLiveExam startTime endTime questions createdAt createdBy')
             .lean();
 
         const examIds = exams.map((exam) => exam._id);
@@ -1855,6 +1865,7 @@ exports.createAssignment = async (req, res) => {
 
         const questions = await QuestionBank.insertMany(payload.questions, { ordered: true });
         const exam = await Exam.create({
+            program: payload.program || 'general',
             title: payload.title,
             questions: questions.map((question) => question._id),
             duration: payload.duration,
@@ -1912,7 +1923,8 @@ exports.updateAssignment = async (req, res) => {
         const updatedExam = await Exam.findByIdAndUpdate(
             existingExam._id,
             {
-                title: payload.title,
+                program: payload.program || 'general',
+            title: payload.title,
                 questions: questions.map((question) => question._id),
                 duration: payload.duration,
                 totalMarks: questions.length,

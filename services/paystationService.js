@@ -118,7 +118,7 @@ async function initiatePayment({
         password: config.password,
         invoice_number: invoiceNumber,
         currency: 'BDT',
-        payment_amount: Math.round(Number(amount || 0)),
+        payment_amount: Number(Number(amount || 0).toFixed(2)),
         pay_with_charge: config.payWithCharge,
         reference,
         cust_name: customer.name,

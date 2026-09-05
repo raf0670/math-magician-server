@@ -1,3 +1,6 @@
+const { syncProgramAccess, loadProgramAccess } = require('../services/programAccessService');
+const { getMathQuote, invalid } = require('../services/mathPricingService');
+const { MATH_PLAN_IDS, PREPARATION_METHODS, MATH_WEAKNESSES } = require('../config/programs');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
@@ -171,6 +174,10 @@ function getStudentDetailPayload(source) {
         previousStudyDetails: getFormValue(source, 'previousStudyDetails'),
         strongestSection: getFormValue(source, 'strongestSection'),
         weakestSection: getFormValue(source, 'weakestSection'),
+        preparationMethods: Array.isArray(source.preparationMethods) ? source.preparationMethods : [],
+        mathFear: clean(source.mathFear),
+        mathWeaknesses: Array.isArray(source.mathWeaknesses) ? source.mathWeaknesses : [],
+        mathWeaknessOther: clean(source.mathWeaknessOther),
         preferredBatch: getFormValue(source, 'preferredBatch')
     };
 }
@@ -212,6 +219,10 @@ function formatEnrollmentForAdmin(payment, detail) {
         user: payment.user,
         planId: payment.planId,
         planTitle: payment.planTitle,
+        originalAmount: payment.originalAmount || payment.amount,
+        discountAmount: payment.discountAmount || 0,
+        discountType: payment.discountType || 'none',
+        couponCode: payment.couponCode || '',
         amount: payment.amount,
         paymentChoice: payment.paymentChoice || 'full',
         paidAmount: payment.paidAmount || payment.amount,
@@ -245,6 +256,10 @@ function formatPaymentUser(user) {
         house: user.house || '',
         bio: user.bio || '',
         hasClassAccess: Boolean(user.hasClassAccess),
+        hasMathAccess: Boolean(user.hasMathAccess),
+        mathPaymentStatus: user.mathPaymentStatus || 'unpaid',
+        mathAccessStartsAt: user.mathAccessStartsAt || null,
+        generalAccessStartsAt: user.generalAccessStartsAt || null,
         hasBooked: Boolean(user.hasBooked),
         bookedPlanId: user.bookedPlanId || '',
         bookedAt: user.bookedAt || null,
@@ -308,6 +323,16 @@ function isPaystationInitiateSuccess(payload = {}) {
         && Boolean(clean(payload.payment_url));
 }
 
+function verifyMathPaymentAmount(payment, payload = {}) {
+    if (!MATH_PLAN_IDS.includes(payment.planId)) return;
+    const reported = payload.request_amount ?? payload.payment_amount;
+    const expected = payment.paidAmount || payment.amount;
+    if (reported === undefined || !Number.isFinite(Number(reported)) || Math.round(Number(reported) * 100) !== Math.round(expected * 100)) {
+        throw invalid('PayStation did not confirm the exact course price. Please contact support before paying.', 502);
+    }
+    if (payload.invoice_number && payload.invoice_number !== payment.merchantInvoiceNumber) throw invalid('Payment invoice verification failed.', 502);
+}
+
 function getCallbackPayload(req) {
     return {
         ...(req.query || {}),
@@ -346,6 +371,10 @@ async function startPaystationPayment({
         user: user._id,
         planId: plan.id,
         planTitle: plan.title,
+        originalAmount: plan.quote?.originalAmount || plan.amount,
+        discountAmount: plan.quote?.discountAmount || 0,
+        discountType: plan.quote?.discountType || 'none',
+        couponCode: plan.quote?.couponCode || '',
         amount: paymentMeta.amount,
         paymentChoice: paymentMeta.paymentChoice,
         paidAmount: paymentMeta.paidAmount,
@@ -378,6 +407,8 @@ async function startPaystationPayment({
             error.statusCode = 502;
             throw error;
         }
+
+        verifyMathPaymentAmount(payment, createResponse);
 
         await payment.save();
 
@@ -412,7 +443,9 @@ async function startPaystationPayment({
 function applyPaystationStatus(payment, statusPayload, callbackPayload = {}) {
     const statusKind = getPaystationStatusKind(statusPayload);
     const transactionId = getTransactionId(statusPayload) || getTransactionId(callbackPayload);
-    const wasPaid = payment.status === 'paid';
+    const wasPaid = APPROVED_ACCESS_STATUSES.includes(payment.status);
+    // A delayed callback must not downgrade a verified purchase. Refunds remain authoritative.
+    if (wasPaid && statusKind !== 'success' && statusKind !== 'refund') return { statusKind: 'success', shouldUnlock: true, shouldSendEmail: false };
 
     payment.rawExecuteResponse = statusPayload;
     payment.rawCallbackResponse = callbackPayload;
@@ -480,9 +513,11 @@ exports.handlePaystationCallback = async (req, res) => {
             trxId: callbackTrxId || payment.paystationTransactionId
         });
         const statusPayload = getStatusPayload(statusResponse);
+        if (getPaystationStatusKind(statusPayload) === 'success') verifyMathPaymentAmount(payment, statusPayload);
         const result = applyPaystationStatus(payment, statusPayload, callbackPayload);
 
         await payment.save();
+        if (!result.shouldUnlock) await syncUserPaymentAccess(payment.user);
 
         if (result.shouldUnlock) {
             await syncUserPaymentAccess(payment.user);
@@ -504,6 +539,7 @@ exports.handlePaystationCallback = async (req, res) => {
                 paymentId: payment._id,
                 invoice: payment.merchantInvoiceNumber,
                 status: 'paid',
+                plan: payment.planId,
                 paymentChoice: payment.paymentChoice,
                 remainingAmount: payment.remainingAmount
             }));
@@ -538,56 +574,74 @@ function applyMissingPaymentMeta(payment) {
     payment.deliveryMode = payment.deliveryMode || meta.deliveryMode;
 }
 
-async function syncUserPaymentAccess(userId) {
-    const approvedPayments = await Payment.find({
-        user: userId,
-        status: { $in: APPROVED_ACCESS_STATUSES }
-    }).select('planId paymentChoice remainingAmount fullyPaidAt').lean();
-    const booking = await SeatBooking.findOne({ user: userId }).select('planId preferredBatch').lean();
-    const detail = approvedPayments.length
-        ? await EnrollmentDetail.findOne({ user: userId, payment: { $in: approvedPayments.map((payment) => payment._id) } })
-            .select('planId preferredBatch')
-            .sort({ createdAt: -1 })
-            .lean()
-        : null;
+const syncUserPaymentAccess = syncProgramAccess;
 
-    const hasApprovedPayment = approvedPayments.length > 0;
-    const hasFullyPaid = approvedPayments.some((payment) => {
-        const paymentChoice = payment.paymentChoice || 'full';
-        return paymentChoice === 'full'
-            || payment.remainingAmount === 0
-            || Boolean(payment.fullyPaidAt);
-    });
-    const paymentStatus = hasFullyPaid
-        ? 'fullyPaid'
-        : hasApprovedPayment
-            ? 'partiallyPaid'
-            : 'unpaid';
-
-    const house = resolveHouse({
-        planId: detail?.planId || booking?.planId || approvedPayments[0]?.planId,
-        preferredBatch: detail?.preferredBatch || booking?.preferredBatch
-    });
-
-    await User.findByIdAndUpdate(userId, {
-        hasClassAccess: hasApprovedPayment,
-        paymentStatus,
-        ...(house ? { house } : {})
-    });
-
-    return {
-        hasClassAccess: hasApprovedPayment,
-        paymentStatus,
-        house
-    };
+exports.getPaymentQuote = async (req, res) => {
+    try {
+        res.json({ success: true, data: await getMathQuote(req.user._id, req.body.planId, req.body.couponCode) });
+    } catch (error) { res.status(error.statusCode || 500).json({ success: false, message: error.message }); }
+};
+exports.getMathEnrollmentContext = async (req, res) => {
+    try {
+        const { access, payments } = await loadProgramAccess(req.user._id);
+        const detail = await EnrollmentDetail.findOne({ user: req.user._id, payment: { $in: payments.map(p => p._id) } }).sort({ createdAt: -1 }).lean();
+        res.json({ success: true, data: { ...access, student: detail ? getStudentDetailPayload(detail) : null } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+function validateMathSurvey(source) {
+    const errors = [];
+    for (const [field, values] of [['preparationMethods', PREPARATION_METHODS], ['mathWeaknesses', MATH_WEAKNESSES]]) {
+        if (!Array.isArray(source[field]) || !source[field].length || source[field].some(v => !values.includes(v))) errors.push(field);
+    }
+    if (!clean(source.mathFear) || clean(source.mathFear).length > 5000) errors.push('mathFear');
+    if (source.mathWeaknesses?.includes('Others') && !clean(source.mathWeaknessOther)) errors.push('mathWeaknessOther');
+    if (clean(source.mathWeaknessOther).length > 2000) errors.push('mathWeaknessOther');
+    return errors;
+}
+async function submitMathEnrollment(req, res) {
+    let locked = false;
+    try {
+        if (req.body.paymentChoice !== 'full') throw invalid('The Math Course requires full payment.');
+        const lock = await User.findOneAndUpdate({ _id: req.user._id, $or: [{ mathCheckoutLockUntil: { $exists: false } }, { mathCheckoutLockUntil: { $lt: new Date() } }] }, { mathCheckoutLockUntil: new Date(Date.now() + 120000) });
+        if (!lock) throw invalid('Checkout is already being prepared. Please try again shortly.', 409);
+        locked = true;
+        const quote = await getMathQuote(req.user._id, req.body.planId, req.body.couponCode);
+        if (Number(req.body.expectedAmount) !== quote.amount) throw invalid('Your enrollment price has changed. Refresh the page to confirm the current price.', 409);
+        let source = req.body.formData;
+        if (quote.planId === 'slytherinUpgrade') {
+            const paidMath = await Payment.find({ user: req.user._id, planId: { $in: ['math', 'mathSlytherin'] }, status: { $in: APPROVED_ACCESS_STATUSES } }).select('_id').lean();
+            source = await EnrollmentDetail.findOne({ user: req.user._id, payment: { $in: paidMath.map(p => p._id) } }).sort({ createdAt: -1 }).lean();
+        }
+        if (!source || typeof source !== 'object') throw invalid('Enrollment details are required.');
+        source = { ...source, preferredBatch: quote.planId === 'math' ? 'Math Course' : 'Slytherin' };
+        const missingFields = [...validateManualEnrollmentForm(source), ...validateMathSurvey(source)];
+        if (missingFields.length) return res.status(400).json({ success: false, message: 'Please complete all required enrollment fields.', missingFields });
+        if (!isFacebookProfileLink(source.facebookProfile)) throw invalid(FACEBOOK_LINK_ERROR);
+        // Validate the complete document before creating a hosted payment session.
+        await new EnrollmentDetail({ ...getStudentDetailPayload(source), user: req.user._id, payment: new (require('mongoose').Types.ObjectId)(), planId: quote.planId, planTitle: quote.planTitle }).validate();
+        const pending = await Payment.findOne({ user: req.user._id, planId: { $in: MATH_PLAN_IDS }, status: { $in: ['initiated', 'processing'] } }).sort({ createdAt: -1 }).lean();
+        if (pending) {
+            if (pending.planId !== quote.planId || pending.amount !== quote.amount || !pending.paystationPaymentUrl) throw invalid('A math checkout is already pending. Complete or cancel it before starting a different purchase.', 409);
+            return res.json({ success: true, data: { paymentId: pending._id, paymentUrl: pending.paystationPaymentUrl, status: pending.status } });
+        }
+        const plan = { ...getPaymentPlan(quote.planId), amount: quote.amount, quote };
+        const { payment, paymentUrl } = await startPaystationPayment({ user: req.user, plan, paymentChoice: 'full', source, mode: 'enrollment' });
+        res.status(201).json({ success: true, data: { paymentId: payment._id, paymentUrl, status: payment.status, paidAmount: payment.amount } });
+    } catch (error) {
+        res.status(error.statusCode || (error.name === 'ValidationError' ? 400 : 500)).json({ success: false, message: error.message });
+    } finally {
+        if (locked) await User.updateOne({ _id: req.user._id }, { $unset: { mathCheckoutLockUntil: 1 } });
+    }
 }
 
 exports.submitManualEnrollment = async (req, res) => {
+    if (MATH_PLAN_IDS.includes(req.body.planId)) return submitMathEnrollment(req, res);
     try {
         const { planId, formData } = req.body;
         const paymentChoice = getPaymentChoice(req.body.paymentChoice);
         const plan = getPaymentPlan(planId);
 
+        if (MATH_PLAN_IDS.includes(planId)) return res.status(400).json({ success: false, message: 'Use Math Course enrollment for this plan.' });
         if (!plan) {
             return res.status(400).json({ success: false, message: 'Invalid payment plan.' });
         }
@@ -671,6 +725,7 @@ exports.submitSeatBooking = async (req, res) => {
         const { planId, formData } = req.body;
         const plan = getPaymentPlan(planId);
 
+        if (MATH_PLAN_IDS.includes(planId)) return res.status(400).json({ success: false, message: 'Use Math Course enrollment for this plan.' });
         if (!plan) {
             return res.status(400).json({ success: false, message: 'Invalid payment plan.' });
         }
@@ -816,7 +871,8 @@ exports.getPaymentAccess = async (req, res) => {
             return res.status(200).json({
                 success: true,
                 data: {
-                    hasClassAccess: true,
+                    hasMathAccess: true,
+                hasClassAccess: true,
                     paymentStatus: 'fullyPaid',
                     house: req.user.house || '',
                     hasBooked: Boolean(req.user.hasBooked),
@@ -832,9 +888,10 @@ exports.getPaymentAccess = async (req, res) => {
         res.status(200).json({
             success: true,
             data: {
+                ...access,
                 hasClassAccess: access.hasClassAccess,
                 paymentStatus: access.paymentStatus,
-                house: access.house || req.user.house || '',
+                house: access.house,
                 hasBooked: Boolean(booking || req.user.hasBooked),
                 bookedPlanId: booking?.planId || req.user.bookedPlanId || '',
                 bookedAt: booking?.createdAt || req.user.bookedAt || null
@@ -848,9 +905,9 @@ exports.getPaymentAccess = async (req, res) => {
 exports.getAdminEnrollmentReviews = async (req, res) => {
     try {
         const status = clean(req.query.status);
-        const paymentFilter = REVIEW_STATUSES.includes(status)
-            ? { status }
-            : { status: { $in: REVIEW_STATUSES } };
+        const visibleStatuses = [...REVIEW_STATUSES, 'paid', 'initiated', 'processing', 'failed', 'cancelled', 'refund'];
+        const paymentFilter = visibleStatuses.includes(status) ? { status } : { status: { $in: visibleStatuses } };
+        if (req.query.planId) paymentFilter.planId = clean(req.query.planId);
 
         const payments = await Payment.find(paymentFilter)
             .populate('user', 'name email role hasClassAccess paymentStatus')
@@ -976,6 +1033,7 @@ exports.updateEnrollmentReviewStatus = async (req, res) => {
             message: `Enrollment marked as ${status}.`,
             data: {
                 ...formatEnrollmentForAdmin(updatedPayment, detail),
+                ...access,
                 hasClassAccess: access.hasClassAccess,
                 paymentStatus: access.paymentStatus
             }
@@ -1048,6 +1106,7 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
             message: 'Enrollment marked as fully paid.',
             data: {
                 ...formatEnrollmentForAdmin(updatedPayment, detail),
+                ...access,
                 hasClassAccess: access.hasClassAccess,
                 paymentStatus: access.paymentStatus
             }
@@ -1063,6 +1122,8 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
 };
 
 exports._private = {
+    verifyMathPaymentAmount,
+    validateMathSurvey,
     getPaymentChoice,
     getPaymentMethod,
     getPlanPaymentMeta,

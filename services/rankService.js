@@ -1,3 +1,4 @@
+const { programFilter, programOf } = require('../config/programs');
 const Submission = require('../models/Submission');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
@@ -166,6 +167,7 @@ function buildRankTotalsFromSubmissions(submissions = [], studentIds = [], optio
         const studentId = getStudentId(submission.student);
         if (!studentId) continue;
 
+        if (programOf(submission.exam?.program) !== programOf(options.program)) continue;
         const rankPoints = getRankPointsForSubmission(submission, now);
         if (rankPoints === null) continue;
 
@@ -218,24 +220,32 @@ function applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions
     return totalsByStudentId;
 }
 
+function isPenaltyEligibleForMembership(exam, user, program = 'general') {
+    const startsAt = program === 'math' ? user.mathAccessStartsAt : user.generalAccessStartsAt;
+    return !startsAt || (exam.startTime && new Date(exam.startTime) >= new Date(startsAt));
+}
+
 async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [], studentIds = [], options = {}) {
     const now = options.now || new Date();
     const normalizedStudentIds = [...new Set(studentIds.map((value) => value?.toString()).filter(Boolean))];
     if (!normalizedStudentIds.length) return totalsByStudentId;
 
+    const program = programOf(options.program);
     const [eligibleUsers, assignments, dailyLiveExams] = await Promise.all([
         User.find({
             _id: { $in: normalizedStudentIds },
             role: 'student',
-            hasClassAccess: true
-        }).select('_id').lean(),
-        Exam.find({
+            [program === 'math' ? 'hasMathAccess' : 'hasClassAccess']: true
+        }).select('_id mathAccessStartsAt generalAccessStartsAt').lean(),
+        program === 'math' ? Promise.resolve([]) : Exam.find({
+            ...programFilter(program),
             examType: 'assignment',
             isLiveExam: true,
             endTime: { $lte: now },
             totalMarks: { $gt: 0 }
-        }).select('_id').lean(),
+        }).select('_id startTime').lean(),
         Exam.find({
+            ...programFilter(program),
             isLiveExam: true,
             $or: [
                 { examType: 'official' },
@@ -244,16 +254,19 @@ async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [
             competitionCategory: 'daily',
             endTime: { $lte: now },
             totalMarks: { $gt: 0 }
-        }).select('_id').lean()
+        }).select('_id startTime').lean()
     ]);
 
-    const eligibleStudentIds = eligibleUsers.map((user) => user._id.toString());
     const penaltyExams = [
-        ...assignments.map((assignment) => ({ _id: assignment._id, penalty: ASSIGNMENT_MISSING_POINTS })),
-        ...dailyLiveExams.map((exam) => ({ _id: exam._id, penalty: DAILY_LIVE_EXAM_MISSING_POINTS }))
+        ...assignments.map((assignment) => ({ ...assignment, penalty: ASSIGNMENT_MISSING_POINTS })),
+        ...dailyLiveExams.map((exam) => ({ ...exam, penalty: DAILY_LIVE_EXAM_MISSING_POINTS }))
     ];
 
-    return applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions, eligibleStudentIds, penaltyExams);
+    for (const user of eligibleUsers) {
+        const eligibleExams = penaltyExams.filter(exam => isPenaltyEligibleForMembership(exam, user, program));
+        applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions, [user._id.toString()], eligibleExams);
+    }
+    return totalsByStudentId;
 }
 
 async function getRankInfoByStudentIds(studentIds = [], options = {}) {
@@ -261,7 +274,7 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
     if (!normalizedStudentIds.length) return new Map();
 
     const submissions = await Submission.find({ student: { $in: normalizedStudentIds } })
-        .populate('exam', 'totalMarks competitionCategory isLiveExam examType startTime endTime')
+        .populate('exam', 'program totalMarks competitionCategory isLiveExam examType startTime endTime')
         .lean();
 
     const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, normalizedStudentIds, options);
@@ -279,6 +292,7 @@ async function getRankInfoByStudentId(studentId, options = {}) {
 }
 
 module.exports = {
+    isPenaltyEligibleForMembership,
     POINTS_PER_LEVEL,
     RANK_LADDER,
     buildRankInfoFromPoints,

@@ -1,3 +1,4 @@
+const { programFilter, programOf } = require('../config/programs');
 const LiveClass = require('../models/LiveClass');
 
 function clean(value) {
@@ -27,6 +28,7 @@ function parseClassPayload(body = {}) {
     const startsAt = new Date(body.startsAt);
     const endsAt = new Date(body.endsAt);
     const errors = [];
+    if (body.program && !['general', 'math'].includes(body.program)) errors.push('Invalid program.');
 
     if (!title) errors.push('Class title is required.');
     if (!zoomUrl || !isValidZoomUrl(zoomUrl)) errors.push('Please add a valid Zoom URL.');
@@ -37,7 +39,7 @@ function parseClassPayload(body = {}) {
     }
 
     return {
-        payload: { title, zoomUrl, startsAt, endsAt, note },
+        payload: { title, zoomUrl, startsAt, endsAt, note, program: programOf(body.program) },
         errors
     };
 }
@@ -45,7 +47,7 @@ function parseClassPayload(body = {}) {
 exports.getCurrentLiveClass = async (req, res) => {
     try {
         const now = new Date();
-        const liveClass = await LiveClass.findOne({ endsAt: { $gte: now } })
+        const liveClass = await LiveClass.findOne({ ...programFilter(req.query.program), endsAt: { $gte: now } })
             .sort({ startsAt: 1 })
             .populate('createdBy', 'name email')
             .lean();

@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const {
+    getPaymentQuote,
+    getMathEnrollmentContext,
     submitManualEnrollment,
     submitSeatBooking,
     getMyBooking,
@@ -14,6 +16,8 @@ const {
 } = require('../controllers/paymentController');
 const { protect, authorizeAdmin } = require('../middleware/auth');
 
+router.post('/quote', protect, getPaymentQuote);
+router.get('/math-context', protect, getMathEnrollmentContext);
 router.get('/my-access', protect, getPaymentAccess);
 router.get('/my-booking', protect, getMyBooking);
 router.post('/manual-enrollment', protect, submitManualEnrollment);

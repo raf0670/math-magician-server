@@ -8,7 +8,7 @@ const { getDefaultRankInfo, getRankInfoByStudentId } = require('../services/rank
 const PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 15;
 const PASSWORD_RESET_SUCCESS_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
 
-function formatAuthUser(user, rankInfo = getDefaultRankInfo()) {
+function formatAuthUser(user, rankInfo = getDefaultRankInfo(), mathRankInfo = getDefaultRankInfo()) {
     return {
         id: user._id,
         name: user.name,
@@ -17,11 +17,16 @@ function formatAuthUser(user, rankInfo = getDefaultRankInfo()) {
         house: user.house || '',
         bio: user.bio || '',
         hasClassAccess: Boolean(user.hasClassAccess),
+        hasMathAccess: Boolean(user.hasMathAccess),
+        mathPaymentStatus: user.mathPaymentStatus || 'unpaid',
+        mathAccessStartsAt: user.mathAccessStartsAt || null,
+        generalAccessStartsAt: user.generalAccessStartsAt || null,
         hasBooked: Boolean(user.hasBooked),
         bookedPlanId: user.bookedPlanId || '',
         bookedAt: user.bookedAt || null,
         paymentStatus: user.paymentStatus || 'unpaid',
-        rankInfo
+        rankInfo,
+        mathRankInfo
     };
 }
 
@@ -201,18 +206,18 @@ exports.resetPassword = async (req, res) => {
 exports.getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
-            .select('name email role house bio hasClassAccess hasBooked bookedPlanId bookedAt paymentStatus')
+            .select('name email role house bio hasClassAccess hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
             .lean();
 
         if (!user) {
             return res.status(404).json({ success: false, message: 'User account was not found' });
         }
 
-        const rankInfo = await getRankInfoByStudentId(user._id);
+        const [rankInfo, mathRankInfo] = await Promise.all([getRankInfoByStudentId(user._id), getRankInfoByStudentId(user._id, { program: 'math' })]);
 
         res.status(200).json({
             success: true,
-            data: formatAuthUser(user, rankInfo)
+            data: formatAuthUser(user, rankInfo, mathRankInfo)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -234,11 +239,11 @@ exports.updateProfile = async (req, res) => {
             new: true,
             runValidators: true
         }).select('-password');
-        const rankInfo = await getRankInfoByStudentId(user._id);
+        const [rankInfo, mathRankInfo] = await Promise.all([getRankInfoByStudentId(user._id), getRankInfoByStudentId(user._id, { program: 'math' })]);
 
         res.status(200).json({
             success: true,
-            data: formatAuthUser(user, rankInfo)
+            data: formatAuthUser(user, rankInfo, mathRankInfo)
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
