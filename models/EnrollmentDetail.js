@@ -28,12 +28,12 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     },
     bkashTrxID: {
         type: String,
-        required: true,
+        default: '',
         trim: true
     },
     paymentMethod: {
         type: String,
-        enum: ['bkash', 'bank'],
+        enum: ['bkash', 'bank', 'paystation'],
         default: 'bkash'
     },
     referenceName: {

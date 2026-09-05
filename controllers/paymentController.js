@@ -5,11 +5,18 @@ const SeatBooking = require('../models/SeatBooking');
 const { getPaymentPlan } = require('../config/paymentPlans');
 const { resolveHouse } = require('../config/competition');
 const { sendPaymentConfirmedEmail } = require('../services/emailService');
+const {
+    getPaystationStatusKind,
+    getTransactionId,
+    initiatePayment,
+    queryTransactionStatus
+} = require('../services/paystationService');
 
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'];
 const APPROVED_ACCESS_STATUSES = ['approved', 'paid'];
 const PAYMENT_CHOICES = ['full', 'partial'];
-const PAYMENT_METHODS = ['bkash', 'bank'];
+const PAYMENT_METHODS = ['bkash', 'bank', 'paystation'];
+const PAYSTATION_METHOD = 'paystation';
 const PARTIAL_PAYMENT_AMOUNT = 10000;
 const STUDENT_FORM_FIELDS = [
     'email',
@@ -26,8 +33,7 @@ const STUDENT_FORM_FIELDS = [
     'preferredBatch'
 ];
 const REQUIRED_FORM_FIELDS = [
-    ...STUDENT_FORM_FIELDS,
-    'bkashTrxID'
+    ...STUDENT_FORM_FIELDS
 ];
 const FACEBOOK_LINK_ERROR = 'Please enter a valid Facebook profile link.';
 const REFERENCE_EMAIL_ERROR = 'Please enter a valid reference email address.';
@@ -257,6 +263,267 @@ function getPlanPaymentMeta(plan, paymentChoice) {
     };
 }
 
+function getFrontendUrl() {
+    return clean(process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+}
+
+function buildFrontendRedirect(path, params = {}) {
+    const query = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === '') return;
+        query.set(key, value.toString());
+    });
+
+    const queryString = query.toString();
+    return `${getFrontendUrl()}${path}${queryString ? `?${queryString}` : ''}`;
+}
+
+function getPaystationCustomer(source = {}, user = {}) {
+    return {
+        name: getFormValue(source, 'yourName') || clean(user.name) || "Magician's School Student",
+        phone: getFormValue(source, 'phoneNumber') || '01894688018',
+        email: getFormValue(source, 'emailAddress') || getFormValue(source, 'email') || clean(user.email),
+        address: getFormValue(source, 'address') || 'Dhaka'
+    };
+}
+
+function getPaystationCheckoutItems({ plan, paymentMeta, mode }) {
+    return {
+        service: 'Admission preparation program',
+        mode,
+        planId: plan.id,
+        planTitle: plan.title,
+        paymentChoice: paymentMeta.paymentChoice,
+        totalAmount: paymentMeta.amount,
+        paidAmount: paymentMeta.paidAmount,
+        remainingAmount: paymentMeta.remainingAmount,
+        currency: 'BDT'
+    };
+}
+
+function isPaystationInitiateSuccess(payload = {}) {
+    return payload.status_code?.toString() === '200'
+        && clean(payload.status).toLowerCase() === 'success'
+        && Boolean(clean(payload.payment_url));
+}
+
+function getCallbackPayload(req) {
+    return {
+        ...(req.query || {}),
+        ...(req.body || {})
+    };
+}
+
+function getCallbackInvoiceNumber(payload = {}) {
+    return clean(
+        payload.invoice_number
+        || payload.invoice
+        || payload.merchantInvoiceNumber
+        || payload.merchant_invoice_number
+    );
+}
+
+function getStatusPayload(response = {}) {
+    if (response.data && typeof response.data === 'object' && !Array.isArray(response.data)) {
+        return { ...response, ...response.data };
+    }
+
+    return response;
+}
+
+async function startPaystationPayment({
+    user,
+    plan,
+    paymentChoice,
+    source,
+    mode,
+    referencePayload = {}
+}) {
+    const paymentMeta = getPlanPaymentMeta(plan, paymentChoice);
+    const merchantInvoiceNumber = makeInvoiceNumber(user._id);
+    const payment = await Payment.create({
+        user: user._id,
+        planId: plan.id,
+        planTitle: plan.title,
+        amount: paymentMeta.amount,
+        paymentChoice: paymentMeta.paymentChoice,
+        paidAmount: paymentMeta.paidAmount,
+        remainingAmount: paymentMeta.remainingAmount,
+        deliveryMode: paymentMeta.deliveryMode,
+        provider: PAYSTATION_METHOD,
+        paymentMethod: PAYSTATION_METHOD,
+        merchantInvoiceNumber,
+        status: 'initiated'
+    });
+
+    try {
+        const createResponse = await initiatePayment({
+            invoiceNumber: merchantInvoiceNumber,
+            amount: paymentMeta.paidAmount,
+            customer: getPaystationCustomer(source, user),
+            reference: `${plan.title} ${paymentMeta.paymentChoice} payment`,
+            checkoutItems: getPaystationCheckoutItems({ plan, paymentMeta, mode })
+        });
+
+        payment.rawCreateResponse = createResponse;
+        payment.paystationPaymentUrl = clean(createResponse.payment_url);
+        payment.paystationStatus = clean(createResponse.status);
+
+        if (!isPaystationInitiateSuccess(createResponse)) {
+            payment.status = 'failed';
+            payment.failureReason = createResponse.message || 'PayStation could not create a payment link.';
+            await payment.save();
+            const error = new Error(payment.failureReason);
+            error.statusCode = 502;
+            throw error;
+        }
+
+        await payment.save();
+
+        const detail = await EnrollmentDetail.create({
+            user: user._id,
+            payment: payment._id,
+            planId: payment.planId,
+            planTitle: payment.planTitle,
+            bkashTrxID: '',
+            paymentMethod: PAYSTATION_METHOD,
+            ...referencePayload,
+            ...getStudentDetailPayload(source)
+        });
+
+        return {
+            payment,
+            detail,
+            paymentUrl: payment.paystationPaymentUrl
+        };
+    } catch (error) {
+        if (payment.status !== 'failed') {
+            payment.status = 'failed';
+            payment.failureReason = error.message || 'PayStation payment initiation failed.';
+            payment.rawCreateResponse = payment.rawCreateResponse || { error: error.message };
+            await payment.save().catch(() => null);
+        }
+
+        throw error;
+    }
+}
+
+function applyPaystationStatus(payment, statusPayload, callbackPayload = {}) {
+    const statusKind = getPaystationStatusKind(statusPayload);
+    const transactionId = getTransactionId(statusPayload) || getTransactionId(callbackPayload);
+    const wasPaid = payment.status === 'paid';
+
+    payment.rawExecuteResponse = statusPayload;
+    payment.rawCallbackResponse = callbackPayload;
+    payment.paystationStatus = statusKind;
+
+    if (transactionId) {
+        payment.paystationTransactionId = transactionId;
+        if (!payment.trxID) payment.trxID = transactionId;
+    }
+
+    if (statusKind === 'success') {
+        payment.status = 'paid';
+        payment.paidAt = payment.paidAt || new Date();
+        payment.failureReason = '';
+
+        if (payment.paymentChoice === 'full') {
+            payment.remainingAmount = 0;
+            payment.fullyPaidAt = payment.fullyPaidAt || payment.paidAt;
+        }
+
+        return { statusKind, shouldUnlock: true, shouldSendEmail: !wasPaid };
+    }
+
+    if (statusKind === 'processing') {
+        payment.status = 'processing';
+        payment.failureReason = '';
+        return { statusKind, shouldUnlock: false, shouldSendEmail: false };
+    }
+
+    payment.status = statusKind === 'cancelled' || statusKind === 'refund' ? statusKind : 'failed';
+    payment.failureReason = statusPayload.message || callbackPayload.message || `PayStation payment ${payment.status}.`;
+    return { statusKind, shouldUnlock: false, shouldSendEmail: false };
+}
+
+exports.handlePaystationCallback = async (req, res) => {
+    const callbackPayload = getCallbackPayload(req);
+    const invoiceNumber = getCallbackInvoiceNumber(callbackPayload);
+    const callbackTrxId = getTransactionId(callbackPayload);
+
+    try {
+        if (!invoiceNumber && !callbackTrxId) {
+            return res.redirect(buildFrontendRedirect('/payment/failed', {
+                reason: 'missing-payment-reference'
+            }));
+        }
+
+        const payment = invoiceNumber
+            ? await Payment.findOne({ merchantInvoiceNumber: invoiceNumber })
+            : await Payment.findOne({
+                $or: [
+                    { paystationTransactionId: callbackTrxId },
+                    { trxIDNormalized: callbackTrxId.toUpperCase() }
+                ]
+            });
+
+        if (!payment) {
+            return res.redirect(buildFrontendRedirect('/payment/failed', {
+                invoice: invoiceNumber,
+                reason: 'payment-not-found'
+            }));
+        }
+
+        const statusResponse = await queryTransactionStatus({
+            invoiceNumber: payment.merchantInvoiceNumber,
+            trxId: callbackTrxId || payment.paystationTransactionId
+        });
+        const statusPayload = getStatusPayload(statusResponse);
+        const result = applyPaystationStatus(payment, statusPayload, callbackPayload);
+
+        await payment.save();
+
+        if (result.shouldUnlock) {
+            await syncUserPaymentAccess(payment.user);
+
+            if (result.shouldSendEmail) {
+                const user = await User.findById(payment.user).select('name email').lean();
+                if (user?.email) {
+                    await sendPaymentConfirmedEmail({
+                        to: user.email,
+                        name: user.name,
+                        planTitle: payment.planTitle
+                    }).catch((emailError) => {
+                        console.error('PayStation payment confirmation email failed:', emailError.message);
+                    });
+                }
+            }
+
+            return res.redirect(buildFrontendRedirect('/payment/success', {
+                paymentId: payment._id,
+                invoice: payment.merchantInvoiceNumber,
+                status: 'paid',
+                paymentChoice: payment.paymentChoice,
+                remainingAmount: payment.remainingAmount
+            }));
+        }
+
+        return res.redirect(buildFrontendRedirect('/payment/failed', {
+            paymentId: payment._id,
+            invoice: payment.merchantInvoiceNumber,
+            status: payment.status,
+            reason: result.statusKind
+        }));
+    } catch (error) {
+        console.error('PayStation callback failed:', error.message);
+        return res.redirect(buildFrontendRedirect('/payment/failed', {
+            invoice: invoiceNumber,
+            reason: 'verification-failed'
+        }));
+    }
+};
+
 function applyMissingPaymentMeta(payment) {
     const plan = getPaymentPlan(payment.planId);
     if (!plan) return;
@@ -319,7 +586,6 @@ exports.submitManualEnrollment = async (req, res) => {
     try {
         const { planId, formData } = req.body;
         const paymentChoice = getPaymentChoice(req.body.paymentChoice);
-        const paymentMethod = getPaymentMethod(req.body.paymentMethod || formData?.paymentMethod);
         const plan = getPaymentPlan(planId);
 
         if (!plan) {
@@ -328,10 +594,6 @@ exports.submitManualEnrollment = async (req, res) => {
 
         if (!PAYMENT_CHOICES.includes(paymentChoice)) {
             return res.status(400).json({ success: false, message: 'Payment choice must be full or partial.' });
-        }
-
-        if (!paymentMethod) {
-            return res.status(400).json({ success: false, message: 'Payment method must be bkash or bank.' });
         }
 
         if (!formData || typeof formData !== 'object') {
@@ -364,59 +626,32 @@ exports.submitManualEnrollment = async (req, res) => {
             });
         }
 
-        const bkashTrxID = getFormValue(formData, 'bkashTrxID');
-        const existingPayment = await findExistingTransaction(bkashTrxID);
-
-        if (existingPayment) {
-            return res.status(409).json({
-                success: false,
-                message: 'This transaction ID has already been submitted.'
-            });
-        }
-
-        const paymentMeta = getPlanPaymentMeta(plan, paymentChoice);
-        const payment = await Payment.create({
-            user: req.user._id,
-            planId: plan.id,
-            planTitle: plan.title,
-            amount: paymentMeta.amount,
-            paymentChoice: paymentMeta.paymentChoice,
-            paidAmount: paymentMeta.paidAmount,
-            remainingAmount: paymentMeta.remainingAmount,
-            deliveryMode: paymentMeta.deliveryMode,
-            provider: paymentMethod,
-            paymentMethod,
-            merchantInvoiceNumber: makeInvoiceNumber(req.user._id),
-            status: 'pending',
-            trxID: bkashTrxID
+        const { payment, detail, paymentUrl } = await startPaystationPayment({
+            user: req.user,
+            plan,
+            paymentChoice,
+            source: formData,
+            mode: 'enrollment',
+            referencePayload
         });
 
-        const detail = await EnrollmentDetail.create({
-            user: req.user._id,
-            payment: payment._id,
-            planId: payment.planId,
-            planTitle: payment.planTitle,
-            bkashTrxID,
-            paymentMethod,
-            ...referencePayload,
-            ...getStudentDetailPayload(formData)
-        });
         await User.findByIdAndUpdate(req.user._id, {
             house: resolveHouse({ planId: payment.planId, preferredBatch: formData.preferredBatch })
         });
 
         res.status(201).json({
             success: true,
-            message: 'Enrollment submitted for admin review.',
+            message: 'PayStation payment link created.',
             data: {
                 paymentId: payment._id,
+                paymentUrl,
+                merchantInvoiceNumber: payment.merchantInvoiceNumber,
                 status: payment.status,
                 paymentChoice: payment.paymentChoice,
                 paidAmount: payment.paidAmount,
                 remainingAmount: payment.remainingAmount,
                 deliveryMode: payment.deliveryMode,
                 paymentMethod: payment.paymentMethod,
-                bkashTrxID: payment.trxID,
                 ...referencePayload,
                 enrollmentId: detail._id
             }
@@ -426,7 +661,7 @@ exports.submitManualEnrollment = async (req, res) => {
             return res.status(409).json({ success: false, message: 'This transaction ID has already been submitted.' });
         }
 
-        const status = error.name === 'ValidationError' ? 400 : 500;
+        const status = error.statusCode || (error.name === 'ValidationError' ? 400 : 500);
         res.status(status).json({ success: false, message: error.message });
     }
 };
@@ -496,7 +731,7 @@ exports.submitSeatBooking = async (req, res) => {
             }
         });
     } catch (error) {
-        const status = error.name === 'ValidationError' ? 400 : 500;
+        const status = error.statusCode || (error.name === 'ValidationError' ? 400 : 500);
         res.status(status).json({ success: false, message: error.message });
     }
 };
@@ -522,9 +757,6 @@ exports.getMyBooking = async (req, res) => {
 exports.submitBookedCheckout = async (req, res) => {
     try {
         const paymentChoice = getPaymentChoice(req.body.paymentChoice);
-        const paymentMethod = getPaymentMethod(req.body.paymentMethod);
-        const trxID = clean(req.body.trxID || req.body.bkashTrxID || req.body.transactionId);
-        const referencePayload = getReferencePayload(req.body);
         const booking = await SeatBooking.findOne({ user: req.user._id }).lean();
 
         if (!booking) {
@@ -535,79 +767,36 @@ exports.submitBookedCheckout = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Payment choice must be full or partial.' });
         }
 
-        if (!paymentMethod) {
-            return res.status(400).json({ success: false, message: 'Payment method must be bkash or bank.' });
-        }
-
-        if (!trxID) {
-            return res.status(400).json({ success: false, message: 'Transaction ID or reference is required.' });
-        }
-
-        if (referencePayload.referenceEmail && !isBasicEmail(referencePayload.referenceEmail)) {
-            return res.status(400).json({
-                success: false,
-                message: REFERENCE_EMAIL_ERROR,
-                invalidFields: ['referenceEmail']
-            });
-        }
-
         const plan = getPaymentPlan(booking.planId);
         if (!plan) {
             return res.status(400).json({ success: false, message: 'The booked payment plan is no longer available.' });
         }
 
-        const existingPayment = await findExistingTransaction(trxID);
-        if (existingPayment) {
-            return res.status(409).json({
-                success: false,
-                message: 'This transaction ID has already been submitted.'
-            });
-        }
-
-        const paymentMeta = getPlanPaymentMeta(plan, paymentChoice);
-        const payment = await Payment.create({
-            user: req.user._id,
-            planId: plan.id,
-            planTitle: plan.title,
-            amount: paymentMeta.amount,
-            paymentChoice: paymentMeta.paymentChoice,
-            paidAmount: paymentMeta.paidAmount,
-            remainingAmount: paymentMeta.remainingAmount,
-            deliveryMode: paymentMeta.deliveryMode,
-            provider: paymentMethod,
-            paymentMethod,
-            merchantInvoiceNumber: makeInvoiceNumber(req.user._id),
-            status: 'pending',
-            trxID
+        const { payment, detail, paymentUrl } = await startPaystationPayment({
+            user: req.user,
+            plan,
+            paymentChoice,
+            source: booking,
+            mode: 'booked-checkout'
         });
 
-        const detail = await EnrollmentDetail.create({
-            user: req.user._id,
-            payment: payment._id,
-            planId: payment.planId,
-            planTitle: payment.planTitle,
-            bkashTrxID: trxID,
-            paymentMethod,
-            ...referencePayload,
-            ...getStudentDetailPayload(booking)
-        });
         await User.findByIdAndUpdate(req.user._id, {
             house: resolveHouse({ planId: payment.planId, preferredBatch: booking.preferredBatch })
         });
 
         res.status(201).json({
             success: true,
-            message: 'Payment submitted for admin review.',
+            message: 'PayStation payment link created.',
             data: {
                 paymentId: payment._id,
+                paymentUrl,
+                merchantInvoiceNumber: payment.merchantInvoiceNumber,
                 status: payment.status,
                 paymentChoice: payment.paymentChoice,
                 paidAmount: payment.paidAmount,
                 remainingAmount: payment.remainingAmount,
                 deliveryMode: payment.deliveryMode,
                 paymentMethod: payment.paymentMethod,
-                bkashTrxID: payment.trxID,
-                ...referencePayload,
                 enrollmentId: detail._id
             }
         });
@@ -616,7 +805,7 @@ exports.submitBookedCheckout = async (req, res) => {
             return res.status(409).json({ success: false, message: 'This transaction ID has already been submitted.' });
         }
 
-        const status = error.name === 'ValidationError' ? 400 : 500;
+        const status = error.statusCode || (error.name === 'ValidationError' ? 400 : 500);
         res.status(status).json({ success: false, message: error.message });
     }
 };
@@ -643,7 +832,7 @@ exports.getPaymentAccess = async (req, res) => {
         res.status(200).json({
             success: true,
             data: {
-                hasClassAccess: Boolean(req.user.hasClassAccess || access.hasClassAccess),
+                hasClassAccess: access.hasClassAccess,
                 paymentStatus: access.paymentStatus,
                 house: access.house || req.user.house || '',
                 hasBooked: Boolean(booking || req.user.hasBooked),
@@ -875,5 +1064,10 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
 
 exports._private = {
     getPaymentChoice,
-    getPlanPaymentMeta
+    getPaymentMethod,
+    getPlanPaymentMeta,
+    getCallbackInvoiceNumber,
+    getStatusPayload,
+    isPaystationInitiateSuccess,
+    applyPaystationStatus
 };

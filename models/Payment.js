@@ -9,12 +9,12 @@ const PaymentSchema = new mongoose.Schema({
     },
     provider: {
         type: String,
-        enum: ['bkash', 'bank'],
+        enum: ['bkash', 'bank', 'paystation'],
         default: 'bkash'
     },
     paymentMethod: {
         type: String,
-        enum: ['bkash', 'bank'],
+        enum: ['bkash', 'bank', 'paystation'],
         default: 'bkash',
         index: true
     },
@@ -59,7 +59,7 @@ const PaymentSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'approved', 'rejected', 'initiated', 'paid', 'failed', 'cancelled'],
+        enum: ['pending', 'approved', 'rejected', 'initiated', 'processing', 'paid', 'failed', 'cancelled', 'refund'],
         default: 'pending',
         index: true
     },
@@ -73,6 +73,20 @@ const PaymentSchema = new mongoose.Schema({
         type: String,
         trim: true,
         index: true
+    },
+    paystationTransactionId: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    paystationStatus: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    paystationPaymentUrl: {
+        type: String,
+        trim: true
     },
     trxID: {
         type: String,
@@ -121,6 +135,9 @@ const PaymentSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.Mixed
     },
     rawExecuteResponse: {
+        type: mongoose.Schema.Types.Mixed
+    },
+    rawCallbackResponse: {
         type: mongoose.Schema.Types.Mixed
     },
     paidAt: {
