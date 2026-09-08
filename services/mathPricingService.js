@@ -19,6 +19,7 @@ function calculateMathQuote(planId, couponCode = '', access = {}) {
     const discounts = [{ kind: 'none', amount: 0 }];
     if (access.existingHouseEligible && planId === 'math') discounts.push({ kind: 'existingHouse', amount: Math.round(originalMinor * 0.25) });
     if (code === 'MAGNUS500') discounts.push({ kind: 'coupon', amount: 50000 });
+    else if (code === 'CADET15') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.15) });
     else if (code === '7A597883') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.99) });
     else if (code) throw invalid('Invalid discount code.');
     const best = discounts.sort((a, b) => b.amount - a.amount)[0];

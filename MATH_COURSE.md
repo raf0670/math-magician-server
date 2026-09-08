@@ -8,7 +8,7 @@ The Math Course is independent of general website membership. `math` grants math
 - Authenticated `POST /api/payments/quote` accepts `planId` and optional `couponCode`. It returns the original amount, best single discount, and final amount.
 - Authenticated `GET /api/payments/math-context` supplies eligibility and previous enrollment details for prefill/upgrades.
 - `POST /api/payments/manual-enrollment` accepts these plans with full payment, the questionnaire, coupon, and `expectedAmount`. The server recalculates eligibility and pricing; stale/tampered prices are rejected before checkout.
-- Math costs BDT 5,999; the bundle costs BDT 11,998; upgrades cost BDT 5,999 without coupons. Original-house eligibility gives 25% off math. MAGNUS500 subtracts BDT 500; 7a597883 gives 99% off. Only the largest single discount applies to the initial package.
+- Math costs BDT 5,999; the bundle costs BDT 11,998; upgrades cost BDT 5,999 without coupons. Original-house eligibility gives 25% off math. MAGNUS500 subtracts BDT 500; 7a597883 gives 99% off; cadet15 gives 15% off (BDT 5,099.15 for math or BDT 10,198.30 for the bundle). Codes are case-insensitive and surrounding spaces are ignored. Only the largest single discount applies to the initial package, so eligible house students retain 25% off when entering cadet15. Coupons have no expiration or usage cap.
 - Access is derived from all approved/paid payment records. Initiated/processing payments and seat bookings grant no math access. Review changes and verified callbacks synchronize permissions and invalidate cached authentication.
 - Checkout retries reuse matching pending payments. A short per-user checkout lock prevents concurrent duplicate initiation. Verified gateway amounts must match the stored fractional BDT amount before math access is granted.
 
@@ -32,7 +32,7 @@ Configure the 12 Basic and 12 Archive links in `config/contentCatalog.js` under 
 
 ## Validation and release notes
 
-Backend: `npm test` — 125 passing tests, including access matrices, direct route guards, pricing, checkout/callback retries, questionnaire validation, cache invalidation, scoring isolation, and access-date penalties.
+Backend: `npm test` — 128 passing tests, including access matrices, direct route guards, pricing, checkout/callback retries, questionnaire validation, cache invalidation, scoring isolation, and access-date penalties.
 
 Frontend: `npm run lint` and `npm run build` pass. After a build, `node scripts/mathBrowserSmoke.cjs` in the frontend repository runs installed headless Edge against a local server with mocked API responses. It checks desktop/mobile layouts, signup/login continuation, coupon and questionnaire checkout, later upgrades, math navigation, and math administration. Screenshots are saved in ignored `.math-browser/`. Set `MATH_TEST_BROWSER` if Edge is installed elsewhere.
 

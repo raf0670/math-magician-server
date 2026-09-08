@@ -14,7 +14,7 @@ const form = {
     facebookProfile: 'https://facebook.com/test', college: 'Test College', group: 'Science', hscBatch: '2026 or equivalent',
     backupChoice: ['IBA JU'], admissionSystemIdea: 'Yes', preparationMethods: ['By myself'], mathFear: 'Time pressure', mathWeaknesses: ['Wrong approach']
 };
-let user; let payments; let details; let locked; let gatewayCalls; let failInitiation; let returnedAmount; let callbackStatus;
+let user; let payments; let details; let locked; let gatewayCalls; let gatewayAmounts; let failInitiation; let returnedAmount; let callbackStatus;
 function matches(row, filter) {
     return Object.entries(filter).every(([key, value]) => value?.$in ? value.$in.some(v => String(v) === String(row[key])) : String(row[key]) === String(value));
 }
@@ -35,6 +35,7 @@ axios.post = async (url, body) => {
     const fields = new URLSearchParams(body);
     if (url.endsWith('/initiate-payment')) {
         gatewayCalls++;
+        gatewayAmounts.push(Number(fields.get('payment_amount')));
         return { data: failInitiation ? { status: 'failed', message: 'Gateway unavailable' } : {
             status: 'success', status_code: '200', invoice_number: fields.get('invoice_number'),
             payment_amount: returnedAmount ?? fields.get('payment_amount'), payment_url: 'https://sandbox.paystation.com.bd/test-checkout'
@@ -45,7 +46,7 @@ axios.post = async (url, body) => {
 };
 beforeEach(() => {
     user = { _id: userId, role: 'student', email: 'test@example.com' };
-    payments = []; details = []; locked = false; gatewayCalls = 0; failInitiation = false; returnedAmount = null; callbackStatus = 'success'; emails = 0;
+    payments = []; details = []; locked = false; gatewayCalls = 0; gatewayAmounts = []; failInitiation = false; returnedAmount = null; callbackStatus = 'success'; emails = 0;
     Object.assign(process.env, { PAYSTATION_ENV: 'sandbox', PAYSTATION_SANDBOX_BASE_URL: 'https://sandbox.paystation.com.bd', PAYSTATION_SANDBOX_STORE_ID: 'test', PAYSTATION_SANDBOX_PASSWORD: 'test', PAYSTATION_CALLBACK_URL: 'https://example.com/callback' });
 });
 async function call(handler, body = {}, queryParams = {}) {
@@ -70,6 +71,26 @@ test('checkout ignores submitted prices, snapshots server discounts, and reuses 
     assert.equal(retry.status, 200); assert.equal(String(retry.data.paymentId), String(first.data.paymentId));
     assert.equal(gatewayCalls, 1); assert.equal(payments.length, 1); assert.equal(locked, false);
 });
+for (const [planId, originalAmount, amount, discountAmount] of [['math', 5999, 5099.15, 899.85], ['mathSlytherin', 11998, 10198.30, 1799.70]]) {
+    test(`cadet15 ${planId} checkout stores and verifies the exact discounted gateway amount`, async () => {
+        const body = enrollment({ planId, couponCode: '  CaDeT15  ', expectedAmount: amount });
+        assert.equal((await call(controller.submitManualEnrollment, { ...body, expectedAmount: 1 })).status, 409);
+        assert.equal(gatewayCalls, 0);
+        assert.equal((await call(controller.submitManualEnrollment, body)).status, 201);
+        assert.deepEqual(gatewayAmounts, [amount]);
+        assert.equal(payments[0].originalAmount, originalAmount);
+        assert.equal(payments[0].amount, amount);
+        assert.equal(payments[0].discountAmount, discountAmount);
+        assert.equal(payments[0].discountType, 'coupon');
+        assert.equal(payments[0].couponCode, 'CADET15');
+        const callback = await call(controller.handlePaystationCallback, {}, { invoice_number: payments[0].merchantInvoiceNumber });
+        assert.match(callback.redirect, /payment\/success/);
+        assert.equal(payments[0].status, 'paid');
+        assert.equal(user.hasMathAccess, true);
+        assert.equal(user.hasClassAccess, planId === 'mathSlytherin');
+    });
+}
+
 test('stale prices and concurrent checkouts are rejected before creating payment sessions', async () => {
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ expectedAmount: 1 }))).status, 409);
     locked = true;

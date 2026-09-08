@@ -64,6 +64,23 @@ test('prices use the whole package and best single discount with two-decimal pre
         ['math', '7a597883', true, 59.99]
     ]) assert.equal(calculateMathQuote(plan, code, { existingHouseEligible: eligible }).amount, amount);
 });
+test('cadet15 discounts both initial packages, normalizes codes, and preserves house and upgrade rules', () => {
+    for (const code of ['cadet15', 'CADET15', '  CaDeT15  ']) {
+        for (const [plan, amount, discount] of [['math', 5099.15, 899.85], ['mathSlytherin', 10198.30, 1799.70]]) {
+            const quote = calculateMathQuote(plan, code);
+            assert.equal(quote.amount, amount);
+            assert.equal(quote.discountAmount, discount);
+            assert.equal(quote.discountType, 'coupon');
+            assert.equal(quote.couponCode, 'CADET15');
+        }
+    }
+    const houseQuote = calculateMathQuote('math', 'cadet15', { existingHouseEligible: true });
+    assert.equal(houseQuote.amount, 4499.25);
+    assert.equal(houseQuote.discountType, 'existingHouse');
+    assert.equal(houseQuote.couponCode, '');
+    assert.throws(() => calculateMathQuote('slytherinUpgrade', 'cadet15', { hasMathAccess: true }), /do not apply/);
+});
+
 test('pricing rejects invalid codes, duplicate math enrollment, and ineligible upgrades', () => {
     assert.throws(() => calculateMathQuote('math', 'INVALID'), /Invalid discount/);
     assert.throws(() => calculateMathQuote('math', {}), /Invalid discount/);
