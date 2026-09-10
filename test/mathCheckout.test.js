@@ -71,25 +71,64 @@ test('checkout ignores submitted prices, snapshots server discounts, and reuses 
     assert.equal(retry.status, 200); assert.equal(String(retry.data.paymentId), String(first.data.paymentId));
     assert.equal(gatewayCalls, 1); assert.equal(payments.length, 1); assert.equal(locked, false);
 });
-for (const [planId, originalAmount, amount, discountAmount] of [['math', 5999, 5099.15, 899.85], ['mathSlytherin', 11998, 10198.30, 1799.70]]) {
-    test(`cadet15 ${planId} checkout stores and verifies the exact discounted gateway amount`, async () => {
-        const body = enrollment({ planId, couponCode: '  CaDeT15  ', expectedAmount: amount });
-        assert.equal((await call(controller.submitManualEnrollment, { ...body, expectedAmount: 1 })).status, 409);
-        assert.equal(gatewayCalls, 0);
-        assert.equal((await call(controller.submitManualEnrollment, body)).status, 201);
-        assert.deepEqual(gatewayAmounts, [amount]);
-        assert.equal(payments[0].originalAmount, originalAmount);
-        assert.equal(payments[0].amount, amount);
-        assert.equal(payments[0].discountAmount, discountAmount);
-        assert.equal(payments[0].discountType, 'coupon');
-        assert.equal(payments[0].couponCode, 'CADET15');
-        const callback = await call(controller.handlePaystationCallback, {}, { invoice_number: payments[0].merchantInvoiceNumber });
-        assert.match(callback.redirect, /payment\/success/);
-        assert.equal(payments[0].status, 'paid');
-        assert.equal(user.hasMathAccess, true);
-        assert.equal(user.hasClassAccess, planId === 'mathSlytherin');
-    });
+const couponCases = [
+    ['cadet20', 4799.20, 9598.40],
+    ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498]),
+    ['early67', 5329, 11328]
+];
+for (const [coupon, mathAmount, bundleAmount] of couponCases) {
+    for (const [planId, originalAmount, amount] of [['math', 5999, mathAmount], ['mathSlytherin', 11998, bundleAmount]]) {
+        test(`${coupon} ${planId} checkout stores and verifies the exact discounted gateway amount`, async () => {
+            const body = enrollment({ planId, couponCode: `  ${coupon[0].toUpperCase()}${coupon.slice(1)}  `, expectedAmount: amount });
+            const quote = await call(controller.getPaymentQuote, body);
+            assert.equal(quote.status, 200);
+            assert.equal(quote.data.amount, amount);
+            assert.equal((await call(controller.submitManualEnrollment, { ...body, expectedAmount: 1 })).status, 409);
+            assert.equal(gatewayCalls, 0);
+            assert.equal((await call(controller.submitManualEnrollment, body)).status, 201);
+            assert.deepEqual(gatewayAmounts, [amount]);
+            assert.equal(payments[0].originalAmount, originalAmount);
+            assert.equal(payments[0].amount, amount);
+            assert.equal(payments[0].discountAmount, Number((originalAmount - amount).toFixed(2)));
+            assert.equal(payments[0].discountType, 'coupon');
+            assert.equal(payments[0].couponCode, coupon.toUpperCase());
+            const callback = await call(controller.handlePaystationCallback, {}, { invoice_number: payments[0].merchantInvoiceNumber });
+            assert.match(callback.redirect, /payment\/success/);
+            assert.equal(payments[0].status, 'paid');
+            assert.equal(user.hasMathAccess, true);
+            assert.equal(user.hasClassAccess, planId === 'mathSlytherin');
+        });
+    }
+
 }
+
+test('cadet15 is rejected by quote and checkout endpoints without creating a payment', async () => {
+    for (const planId of ['math', 'mathSlytherin']) {
+        for (const couponCode of ['cadet15', 'CADET15', '  CaDeT15  ']) {
+            const body = enrollment({ planId, couponCode });
+            assert.equal((await call(controller.getPaymentQuote, body)).status, 400);
+            assert.equal((await call(controller.submitManualEnrollment, body)).status, 400);
+        }
+    }
+    assert.equal(gatewayCalls, 0);
+    assert.equal(payments.length, 0);
+});
+
+test('already-issued cadet15 payments retain their original amount and discount on verification', async () => {
+    const payment = await Payment.create({
+        user: userId, planId: 'math', status: 'initiated', paymentMethod: 'paystation', paymentChoice: 'full',
+        amount: 5099.15, paidAmount: 5099.15, originalAmount: 5999, discountAmount: 899.85,
+        discountType: 'coupon', couponCode: 'CADET15', merchantInvoiceNumber: 'LEGACY-CADET15'
+    });
+    const callback = await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
+    assert.match(callback.redirect, /payment\/success/);
+    assert.equal(payment.status, 'paid');
+    assert.equal(payment.amount, 5099.15);
+    assert.equal(payment.discountAmount, 899.85);
+    assert.equal(payment.couponCode, 'CADET15');
+    assert.equal(user.hasMathAccess, true);
+    assert.equal(gatewayCalls, 0);
+});
 
 test('stale prices and concurrent checkouts are rejected before creating payment sessions', async () => {
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ expectedAmount: 1 }))).status, 409);
