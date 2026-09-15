@@ -13,11 +13,12 @@ The Math Course is independent of general website membership. `math` grants math
 | Code | Discount | Math only | Math + Slytherin |
 |---|---|---:|---:|
 | cadet20 | 20% | BDT 4,799.20 | BDT 9,598.40 |
+| fcc26 | 26% | BDT 4,439.26 | BDT 8,878.52 |
 | MAGNUS500, zehad500, nasif500, sadat500, shuvro500, sajin500 | BDT 500 | BDT 5,499.00 | BDT 11,498.00 |
 | early67 | BDT 670 | BDT 5,329.00 | BDT 11,328.00 |
 | 7a597883 | 99% | BDT 59.99 | BDT 119.98 |
 
-- `cadet15` is retired and rejected for new quotes and checkout requests. Existing payment records and already-issued checkout amounts retain their original terms. Eligible original-house students retain their larger 25% discount when entering cadet20 or a fixed-amount coupon.
+- `cadet15` is retired and rejected for new quotes and checkout requests. Existing payment records and already-issued checkout amounts retain their original terms. Eligible original-house students retain their larger 25% discount when entering cadet20 or a fixed-amount coupon; fcc26 wins over the automatic house discount because it grants 26% off.
 - Access is derived from all approved/paid payment records. Initiated/processing payments and seat bookings grant no math access. Review changes and verified callbacks synchronize permissions and invalidate cached authentication.
 - Checkout retries reuse matching pending payments. A short per-user checkout lock prevents concurrent duplicate initiation. Verified gateway amounts must match the stored fractional BDT amount before math access is granted.
 
@@ -41,7 +42,7 @@ Configure the 12 Basic and 12 Archive links in `config/contentCatalog.js` under 
 
 ## Validation and release notes
 
-Backend: `npm test` — 142 passing tests, including access matrices, direct route guards, pricing, checkout/callback retries, questionnaire validation, cache invalidation, scoring isolation, and access-date penalties.
+Backend: `npm test` — 146 passing tests, including access matrices, direct route guards, pricing, checkout/callback retries, questionnaire validation, cache invalidation, scoring isolation, and access-date penalties.
 
 Frontend: `npm run lint` and `npm run build` pass. After a build, `node scripts/mathBrowserSmoke.cjs` in the frontend repository runs installed headless Edge against a local server with mocked API responses. It checks desktop/mobile layouts, signup/login continuation, coupon and questionnaire checkout, later upgrades, math navigation, and math administration. Screenshots are saved in ignored `.math-browser/`. Set `MATH_TEST_BROWSER` if Edge is installed elsewhere.
 

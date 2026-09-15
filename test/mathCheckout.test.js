@@ -73,6 +73,7 @@ test('checkout ignores submitted prices, snapshots server discounts, and reuses 
 });
 const couponCases = [
     ['cadet20', 4799.20, 9598.40],
+    ['fcc26', 4439.26, 8878.52],
     ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498]),
     ['early67', 5329, 11328]
 ];
@@ -161,12 +162,37 @@ test('approved house students get the automatic discount and cannot buy the bund
     assert.equal(result.status, 201); assert.equal(payments.at(-1).amount, 4499.25); assert.equal(user.house, 'Gryffindor');
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ planId: 'mathSlytherin', expectedAmount: 11998 }))).status, 400);
 });
+test('fcc26 beats the automatic house discount and is stored through checkout', async () => {
+    user.house = 'Gryffindor';
+    await Payment.create({ user: userId, planId: 'offline', status: 'approved', paymentChoice: 'partial', remainingAmount: 8000 });
+    const body = enrollment({ couponCode: '  FcC26  ', expectedAmount: 4439.26 });
+    const quote = await call(controller.getPaymentQuote, body);
+    assert.equal(quote.status, 200);
+    assert.equal(quote.data.amount, 4439.26);
+    assert.equal(quote.data.discountAmount, 1559.74);
+    assert.equal(quote.data.discountType, 'coupon');
+    assert.equal(quote.data.couponCode, 'FCC26');
+    const result = await call(controller.submitManualEnrollment, body);
+    const mathPayment = payments.at(-1);
+    assert.equal(result.status, 201);
+    assert.equal(mathPayment.originalAmount, 5999);
+    assert.equal(mathPayment.amount, 4439.26);
+    assert.equal(mathPayment.discountAmount, 1559.74);
+    assert.equal(mathPayment.discountType, 'coupon');
+    assert.equal(mathPayment.couponCode, 'FCC26');
+    assert.deepEqual(gatewayAmounts, [4439.26]);
+    await call(controller.handlePaystationCallback, {}, { invoice_number: mathPayment.merchantInvoiceNumber });
+    assert.equal(mathPayment.status, 'paid');
+    assert.equal(user.hasMathAccess, true);
+    assert.equal(user.house, 'Gryffindor');
+});
 test('upgrade reuses paid math enrollment details, forbids coupons and duplicate purchases', async () => {
     await existingMath();
     assert.equal((await call(controller.submitManualEnrollment, enrollment())).status, 409);
     const result = await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', formData: undefined }));
     assert.equal(result.status, 201); assert.equal(details.at(-1).mathFear, form.mathFear); assert.equal(details.at(-1).preferredBatch, 'Slytherin');
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', couponCode: 'MAGNUS500' }))).status, 400);
+    assert.equal((await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', couponCode: 'fcc26' }))).status, 400);
 });
 test('verified callbacks grant only math access, repeated callbacks do not resend email, and refunds remove access', async () => {
     await call(controller.submitManualEnrollment, enrollment());

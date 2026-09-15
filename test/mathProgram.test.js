@@ -92,6 +92,27 @@ test('new coupons discount both packages, normalize codes, and preserve house an
     }
 });
 
+test('fcc26 discounts both packages and wins over existing-house eligibility', () => {
+    for (const code of ['fcc26', 'FCC26', '  FcC26  ']) {
+        for (const [plan, originalAmount, amount] of [
+            ['math', 5999, 4439.26],
+            ['mathSlytherin', 11998, 8878.52]
+        ]) {
+            const quote = calculateMathQuote(plan, code);
+            assert.equal(quote.amount, amount);
+            assert.equal(quote.discountAmount, Number((originalAmount - amount).toFixed(2)));
+            assert.equal(quote.discountType, 'coupon');
+            assert.equal(quote.couponCode, 'FCC26');
+        }
+        const houseQuote = calculateMathQuote('math', code, { existingHouseEligible: true });
+        assert.equal(houseQuote.amount, 4439.26);
+        assert.equal(houseQuote.discountAmount, 1559.74);
+        assert.equal(houseQuote.discountType, 'coupon');
+        assert.equal(houseQuote.couponCode, 'FCC26');
+        assert.throws(() => calculateMathQuote('slytherinUpgrade', code, { hasMathAccess: true }), /do not apply/);
+    }
+});
+
 test('pricing rejects invalid codes, duplicate math enrollment, and ineligible upgrades', () => {
     assert.throws(() => calculateMathQuote('math', 'INVALID'), /Invalid discount/);
     assert.throws(() => calculateMathQuote('math', {}), /Invalid discount/);
