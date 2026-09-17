@@ -4,6 +4,9 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { sendPasswordResetEmail } = require('../services/emailService');
 const { getDefaultRankInfo, getRankInfoByStudentId } = require('../services/rankService');
+const { uploadImageToImgBB } = require('../services/imgbbService');
+const { detectImageMimeType, getAllowedMimeTypes } = require('../middleware/profileImageUpload');
+const { invalidateAuthUser } = require('../middleware/auth');
 
 const PASSWORD_RESET_TOKEN_EXPIRY_MINUTES = 15;
 const PASSWORD_RESET_SUCCESS_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
@@ -16,6 +19,8 @@ function formatAuthUser(user, rankInfo = getDefaultRankInfo(), mathRankInfo = ge
         role: user.role,
         house: user.house || '',
         bio: user.bio || '',
+        profileImageUrl: user.profileImage?.url || '',
+        profileImageThumbUrl: user.profileImage?.thumbUrl || user.profileImage?.url || '',
         hasClassAccess: Boolean(user.hasClassAccess),
         hasMathAccess: Boolean(user.hasMathAccess),
         mathPaymentStatus: user.mathPaymentStatus || 'unpaid',
@@ -206,7 +211,7 @@ exports.resetPassword = async (req, res) => {
 exports.getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
-            .select('name email role house bio hasClassAccess hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
+            .select('name email role house bio profileImage hasClassAccess hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
             .lean();
 
         if (!user) {
@@ -239,6 +244,7 @@ exports.updateProfile = async (req, res) => {
             new: true,
             runValidators: true
         }).select('-password');
+        invalidateAuthUser(user._id);
         const [rankInfo, mathRankInfo] = await Promise.all([getRankInfoByStudentId(user._id), getRankInfoByStudentId(user._id, { program: 'math' })]);
 
         res.status(200).json({
@@ -247,6 +253,53 @@ exports.updateProfile = async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Upload the current user's profile picture
+// @route   PUT /api/auth/profile-picture
+// @access  Private
+exports.updateProfilePicture = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'Please choose an image to upload.' });
+        }
+
+        const detectedMimeType = detectImageMimeType(req.file.buffer);
+        if (!detectedMimeType || !getAllowedMimeTypes().has(detectedMimeType)) {
+            return res.status(400).json({ success: false, message: 'The selected file is not a valid JPG, PNG, or WebP image.' });
+        }
+
+        const profileImage = await uploadImageToImgBB({
+            buffer: req.file.buffer,
+            filename: req.file.originalname
+        });
+        const user = await User.findByIdAndUpdate(
+            req.user._id,
+            { profileImage },
+            { new: true, runValidators: true }
+        ).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User account was not found' });
+        }
+
+        invalidateAuthUser(user._id);
+        const [rankInfo, mathRankInfo] = await Promise.all([
+            getRankInfoByStudentId(user._id),
+            getRankInfoByStudentId(user._id, { program: 'math' })
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            data: formatAuthUser(user, rankInfo, mathRankInfo)
+        });
+    } catch (error) {
+        console.error('Profile image upload failed:', error.cause?.message || error.message);
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.statusCode ? error.message : 'Unable to update the profile image.'
+        });
     }
 };
 

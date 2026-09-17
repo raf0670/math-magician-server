@@ -49,6 +49,14 @@ const UserSchema = new mongoose.Schema({
         maxlength: [160, 'Bio must be 160 characters or fewer'],
         default: ''
     },
+    profileImage: {
+        url: { type: String, trim: true, default: '' },
+        thumbUrl: { type: String, trim: true, default: '' },
+        provider: { type: String, enum: ['imgbb'], default: 'imgbb' },
+        providerId: { type: String, trim: true, default: '' },
+        deleteUrl: { type: String, trim: true, default: '', select: false },
+        uploadedAt: { type: Date, default: null }
+    },
     enrolledCourses: [
         {
             type: mongoose.Schema.Types.ObjectId,

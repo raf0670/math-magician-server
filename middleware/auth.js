@@ -50,7 +50,7 @@ exports.protect = async (req, res, next) => {
             if (!req.user) {
                 // Fetch only request-scoped auth fields to reduce DB work during live-exam bursts.
                 const user = await User.findById(decoded.id)
-                    .select('name email role house bio hasClassAccess hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
+                    .select('name email role house bio profileImage hasClassAccess hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
                     .lean();
 
                 if (user) {
