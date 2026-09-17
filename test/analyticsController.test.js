@@ -133,6 +133,30 @@ test('exam leaderboard gives equal scores the same rank', () => {
     assert.deepEqual(leaderboard.map((entry) => entry.studentName), ['Second', 'First', 'Third']);
 });
 
+test('exam leaderboard exposes only public profile image fields', () => {
+    const [entry] = _private.buildExamLeaderboard([
+        {
+            student: {
+                _id: 'student-1',
+                name: 'Profile Student',
+                house: 'Gryffindor',
+                profileImage: {
+                    url: 'https://example.com/profile.jpg',
+                    thumbUrl: 'https://example.com/profile-thumb.jpg',
+                    deleteUrl: 'https://example.com/delete-secret'
+                }
+            },
+            score: 8,
+            submittedAt: new Date('2026-08-24T17:03:00.000Z')
+        }
+    ]);
+
+    assert.equal(entry.profileImageUrl, 'https://example.com/profile.jpg');
+    assert.equal(entry.profileImageThumbUrl, 'https://example.com/profile-thumb.jpg');
+    assert.equal('profileImage' in entry, false);
+    assert.equal('deleteUrl' in entry, false);
+});
+
 test('exam leaderboard excludes retake submissions', () => {
     const leaderboard = _private.buildExamLeaderboard([
         {

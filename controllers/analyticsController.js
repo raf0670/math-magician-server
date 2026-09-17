@@ -70,6 +70,13 @@ function getStudentId(value) {
     return value?._id?.toString?.() || value?.toString?.() || '';
 }
 
+function formatStudentProfileImage(student) {
+    return {
+        profileImageUrl: student?.profileImage?.url || '',
+        profileImageThumbUrl: student?.profileImage?.thumbUrl || student?.profileImage?.url || ''
+    };
+}
+
 function formatStudent(student) {
     if (!student) return null;
 
@@ -77,7 +84,8 @@ function formatStudent(student) {
         studentId: getStudentId(student),
         name: student.name || 'Student',
         email: student.email || '',
-        house: normalizeHouse(student.house) || ''
+        house: normalizeHouse(student.house) || '',
+        ...formatStudentProfileImage(student)
     };
 }
 
@@ -115,6 +123,7 @@ function buildExamLeaderboard(submissions = []) {
         .map((submission) => ({
             studentId: getStudentId(submission.student),
             studentName: submission.student?.name || 'Student',
+            ...formatStudentProfileImage(submission.student),
             house: programOf(submission.exam?.program) === 'math' ? '' : normalizeHouse(submission.student?.house) || '',
             score: getEffectiveScore(submission),
             originalScore: Number(submission.score || 0),
@@ -175,7 +184,7 @@ async function getCompetitionData(program = 'general') {
     const examIds = exams.map((exam) => exam._id);
     const submissions = examIds.length
         ? await Submission.find({ exam: { $in: examIds }, isRetake: { $ne: true } })
-            .populate('student', 'name email house')
+            .populate('student', 'name email house profileImage')
             .populate('exam', 'program title totalMarks competitionCategory examType isLiveExam startTime endTime')
             .sort({ submittedAt: 1 })
             .lean()
@@ -188,7 +197,7 @@ async function getCompetitionData(program = 'general') {
     const houseResultsByHouse = new Map(HOUSES.map((house) => [house, []]));
 
     if (program === 'math') {
-        const enrollees = await User.find({ role: 'student', hasMathAccess: true }).select('name').lean();
+        const enrollees = await User.find({ role: 'student', hasMathAccess: true }).select('name profileImage').lean();
         for (const student of enrollees) {
             const entry = formatStudent(student);
             leaderboardByStudentId.set(entry.studentId, {
@@ -434,7 +443,7 @@ exports.getExamLeaderboard = async (req, res) => {
         const submissions = isPendingDelayedResultExam(exam)
             ? []
             : await Submission.find({ exam: examId, isRetake: { $ne: true } })
-                .populate('student', 'name house')
+                .populate('student', 'name house profileImage')
                 .sort({ score: -1, submittedAt: 1 })
                 .lean();
 

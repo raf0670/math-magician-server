@@ -16,7 +16,7 @@ test('math scores, retakes and disqualifications stay isolated from general hous
     const users = [
         { _id: 'original', name: 'Original house', house: 'Gryffindor', hasClassAccess: true, hasMathAccess: true },
         { _id: 'bundle', name: 'Slytherin member', house: 'Slytherin', hasClassAccess: true, hasMathAccess: true },
-        { _id: 'mathOnly', name: 'Math only', house: '', hasClassAccess: false, hasMathAccess: true },
+        { _id: 'mathOnly', name: 'Math only', house: '', hasClassAccess: false, hasMathAccess: true, profileImage: { url: 'https://example.com/math.jpg', thumbUrl: 'https://example.com/math-thumb.jpg', deleteUrl: 'hidden' } },
         { _id: 'newStudent', name: 'New math student', house: '', hasClassAccess: false, hasMathAccess: true, mathAccessStartsAt: new Date('2026-01-01') }
     ];
     const row = (student, exam, score, extras = {}) => ({ student, exam, score, submittedAt: date, ...extras });
@@ -45,6 +45,8 @@ test('math scores, retakes and disqualifications stay isolated from general hous
     assert.deepEqual(competition.champions.houses, []);
     assert.ok(competition.leaderboard.every(student => student.house === '' && student.email === ''));
     assert.equal(competition.leaderboard.find(student => student.studentId === 'mathOnly').totalScore, 19);
+    assert.equal(competition.leaderboard.find(student => student.studentId === 'mathOnly').profileImageThumbUrl, 'https://example.com/math-thumb.jpg');
+    assert.equal('profileImage' in competition.leaderboard.find(student => student.studentId === 'mathOnly'), false);
     assert.equal(competition.leaderboard.find(student => student.studentId === 'original').totalScore, 20);
     assert.equal(competition.leaderboard.find(student => student.studentId === 'bundle').rankInfo.rankPoints, 9);
 });
