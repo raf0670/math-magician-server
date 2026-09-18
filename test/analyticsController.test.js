@@ -219,3 +219,60 @@ test('exam leaderboard counts disqualified submissions as zero effective score',
     assert.equal(leaderboard[1].originalScore, 10);
     assert.equal(leaderboard[1].isDisqualified, true);
 });
+
+test('competition champion ordering prioritizes RP and applies every deterministic tie-break', () => {
+    const entry = (overrides = {}) => ({
+        studentId: 'student-b',
+        name: 'Beta Student',
+        house: 'Gryffindor',
+        totalScore: 50,
+        bestScore: 20,
+        lastSubmittedAt: new Date('2026-08-24T17:00:00.000Z'),
+        rankInfo: { rankPoints: 10 },
+        ...overrides
+    });
+    const comesBefore = (first, second) => assert.ok(_private.sortRankPointCompetitionEntries(first, second) < 0);
+
+    comesBefore(entry({ totalScore: 1, rankInfo: { rankPoints: 11 } }), entry({ totalScore: 100 }));
+    comesBefore(entry({ totalScore: 51 }), entry({ totalScore: 50 }));
+    comesBefore(entry({ bestScore: 21 }), entry({ bestScore: 20 }));
+    comesBefore(
+        entry({ lastSubmittedAt: new Date('2026-08-24T16:59:00.000Z') }),
+        entry({ lastSubmittedAt: new Date('2026-08-24T17:00:00.000Z') })
+    );
+    comesBefore(entry({ name: 'Alpha Student' }), entry({ name: 'Beta Student' }));
+    comesBefore(
+        entry({ studentId: 'student-a', name: 'Same Student' }),
+        entry({ studentId: 'student-b', name: 'Same Student' })
+    );
+});
+
+test('competition champions are selected independently by RP for each house', () => {
+    const entries = [
+        {
+            studentId: 'gryffindor-score', name: 'Score Leader', house: 'Gryffindor', totalScore: 100,
+            bestScore: 50, lastSubmittedAt: new Date('2026-08-24T17:00:00.000Z'), rankInfo: { rankPoints: 10 }
+        },
+        {
+            studentId: 'gryffindor-rp', name: 'RP Leader', house: 'Gryffindor', totalScore: 40,
+            bestScore: 20, lastSubmittedAt: new Date('2026-08-24T17:01:00.000Z'), rankInfo: { rankPoints: 20 }
+        },
+        {
+            studentId: 'slytherin-rp', name: 'Overall RP Leader', house: 'Slytherin', totalScore: 1,
+            bestScore: 1, lastSubmittedAt: new Date('2026-08-24T17:02:00.000Z'), rankInfo: { rankPoints: 30 }
+        }
+    ];
+
+    const champions = _private.buildCompetitionChampions(entries);
+    const championByHouse = new Map(champions.houses.map((item) => [item.house, item.champion]));
+
+    assert.equal(champions.championOfChampions.studentId, 'slytherin-rp');
+    assert.equal(championByHouse.get('Gryffindor').studentId, 'gryffindor-rp');
+    assert.equal(championByHouse.get('Slytherin').studentId, 'slytherin-rp');
+    assert.equal(championByHouse.get('Ravenclaw'), null);
+    assert.equal(championByHouse.get('Hufflepuff'), null);
+
+    const mathChampions = _private.buildCompetitionChampions(entries, 'math');
+    assert.deepEqual(mathChampions.houses, []);
+    assert.equal(mathChampions.championOfChampions.studentId, 'slytherin-rp');
+});

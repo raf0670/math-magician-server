@@ -95,6 +95,42 @@ function sortCompetitionEntries(first, second) {
     return new Date(first.lastSubmittedAt || 0) - new Date(second.lastSubmittedAt || 0);
 }
 
+function getCompetitionEntryTime(entry) {
+    const time = new Date(entry?.lastSubmittedAt || 0).getTime();
+    return Number.isNaN(time) ? 0 : time;
+}
+
+function sortRankPointCompetitionEntries(first, second) {
+    const rankPointDelta = Number(second.rankInfo?.rankPoints || 0) - Number(first.rankInfo?.rankPoints || 0);
+    if (rankPointDelta !== 0) return rankPointDelta;
+
+    const totalScoreDelta = Number(second.totalScore || 0) - Number(first.totalScore || 0);
+    if (totalScoreDelta !== 0) return totalScoreDelta;
+
+    const bestScoreDelta = Number(second.bestScore || 0) - Number(first.bestScore || 0);
+    if (bestScoreDelta !== 0) return bestScoreDelta;
+
+    const submittedDelta = getCompetitionEntryTime(first) - getCompetitionEntryTime(second);
+    if (submittedDelta !== 0) return submittedDelta;
+
+    const nameDelta = (first.name || '').localeCompare(second.name || '');
+    if (nameDelta !== 0) return nameDelta;
+
+    return (first.studentId || '').toString().localeCompare((second.studentId || '').toString());
+}
+
+function buildCompetitionChampions(entries = [], program = 'general') {
+    const rankPointLeaderboard = [...entries].sort(sortRankPointCompetitionEntries);
+
+    return {
+        houses: (programOf(program) === 'math' ? [] : HOUSES).map((house) => ({
+            house,
+            champion: rankPointLeaderboard.find((entry) => entry.house === house) || null
+        })),
+        championOfChampions: rankPointLeaderboard[0] || null
+    };
+}
+
 function sortExamLeaderboardEntries(first, second) {
     if (second.score !== first.score) return second.score - first.score;
     const submittedDelta = new Date(first.submittedAt || 0) - new Date(second.submittedAt || 0);
@@ -292,6 +328,9 @@ async function getCompetitionData(program = 'general') {
         .sort(sortCompetitionEntries)
         .map((entry, index) => ({ ...entry, rank: index + 1 }));
 
+    const champions = buildCompetitionChampions(leaderboard, program);
+    const championByHouse = new Map(champions.houses.map((item) => [item.house, item.champion]));
+
     const houseStandings = (program === 'math' ? [] : HOUSES).map((house) => {
         const examResults = houseResultsByHouse.get(house) || [];
         const totalPoints = examResults.reduce((sum, item) => sum + item.points, 0);
@@ -301,7 +340,7 @@ async function getCompetitionData(program = 'general') {
             totalPoints: Number(totalPoints.toFixed(2)),
             examsCounted: examResults.filter((item) => item.participantCount > 0).length,
             examResults,
-            champion: leaderboard.find((entry) => entry.house === house) || null
+            champion: championByHouse.get(house) || null
         };
     }).sort((first, second) => second.totalPoints - first.totalPoints);
 
@@ -314,13 +353,7 @@ async function getCompetitionData(program = 'general') {
         leaderboard,
         houseStandings,
         badges,
-        champions: {
-            houses: (program === 'math' ? [] : HOUSES).map((house) => ({
-                house,
-                champion: leaderboard.find((entry) => entry.house === house) || null
-            })),
-            championOfChampions: leaderboard[0] || null
-        }
+        champions
     };
 }
 
@@ -559,6 +592,7 @@ exports._private = {
     buildExamLeaderboard,
     buildExamLeaderboardResponse,
     buildCompetitionExamFilter,
+    buildCompetitionChampions,
     getCompetitionData,
     getEffectiveScore,
     getOfficialSubmissions,
@@ -567,5 +601,6 @@ exports._private = {
     isOfficialLiveExam,
     isPendingOfficialLiveExam: isPendingDelayedResultExam,
     isPendingDelayedResultExam,
-    isSubmissionResultAvailable
+    isSubmissionResultAvailable,
+    sortRankPointCompetitionEntries
 };
