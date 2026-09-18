@@ -7,6 +7,7 @@ const {
     submitSeatBooking,
     getMyBooking,
     submitBookedCheckout,
+    submitRemainingCheckout,
     handlePaystationCallback,
     getPaymentAccess,
     getAdminPreBookings,
@@ -23,6 +24,7 @@ router.get('/my-booking', protect, getMyBooking);
 router.post('/manual-enrollment', protect, submitManualEnrollment);
 router.post('/book-seat', protect, submitSeatBooking);
 router.post('/booked-checkout', protect, submitBookedCheckout);
+router.post('/remaining-checkout', protect, submitRemainingCheckout);
 router.get('/paystation/callback', handlePaystationCallback);
 router.post('/paystation/callback', handlePaystationCallback);
 router.get('/admin/pre-bookings', protect, authorizeAdmin, getAdminPreBookings);

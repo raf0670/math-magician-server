@@ -116,6 +116,52 @@ const PaymentSchema = new mongoose.Schema({
         sparse: true,
         index: true
     },
+    finalMerchantInvoiceNumber: {
+        type: String,
+        trim: true,
+        unique: true,
+        sparse: true,
+        index: true
+    },
+    finalPaymentMethod: {
+        type: String,
+        enum: ['bkash', 'bank', 'paystation']
+    },
+    finalPaidAmount: {
+        type: Number,
+        min: 1
+    },
+    finalPaystationTransactionId: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    finalPaystationStatus: {
+        type: String,
+        trim: true,
+        index: true
+    },
+    finalPaystationPaymentUrl: {
+        type: String,
+        trim: true
+    },
+    finalFailureReason: {
+        type: String,
+        trim: true
+    },
+    finalRawCreateResponse: {
+        type: mongoose.Schema.Types.Mixed
+    },
+    finalRawExecuteResponse: {
+        type: mongoose.Schema.Types.Mixed
+    },
+    finalRawCallbackResponse: {
+        type: mongoose.Schema.Types.Mixed
+    },
+    finalCheckoutLockUntil: {
+        type: Date,
+        select: false
+    },
     fullyPaidAt: {
         type: Date
     },

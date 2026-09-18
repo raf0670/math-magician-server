@@ -1,6 +1,6 @@
 const { syncProgramAccess, loadProgramAccess } = require('../services/programAccessService');
 const { getMathQuote, invalid } = require('../services/mathPricingService');
-const { MATH_PLAN_IDS, PREPARATION_METHODS, MATH_WEAKNESSES } = require('../config/programs');
+const { MATH_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES, PREPARATION_METHODS, MATH_WEAKNESSES } = require('../config/programs');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
@@ -21,6 +21,7 @@ const PAYMENT_CHOICES = ['full', 'partial'];
 const PAYMENT_METHODS = ['bkash', 'bank', 'paystation'];
 const PAYSTATION_METHOD = 'paystation';
 const PARTIAL_PAYMENT_AMOUNT = 10000;
+const FINAL_CHECKOUT_LOCK_MS = 60 * 1000;
 const STUDENT_FORM_FIELDS = [
     'email',
     'yourName',
@@ -72,6 +73,11 @@ function getBackupChoices(formData) {
 function makeInvoiceNumber(userId) {
     const shortUser = userId.toString().slice(-6);
     return `MMS-${shortUser}-${Date.now()}`;
+}
+
+function makeFinalInvoiceNumber(userId) {
+    const shortUser = userId.toString().slice(-6);
+    return `MMS-FIN-${shortUser}-${Date.now()}`;
 }
 
 function getFormValue(formData, key) {
@@ -233,6 +239,9 @@ function formatEnrollmentForAdmin(payment, detail) {
         paymentMethod: payment.paymentMethod || payment.provider || 'bkash',
         bkashTrxID: payment.trxID,
         finalTrxID: payment.finalTrxID,
+        finalPaymentMethod: payment.finalPaymentMethod,
+        finalPaidAmount: payment.finalPaidAmount,
+        finalPaystationStatus: payment.finalPaystationStatus,
         merchantInvoiceNumber: payment.merchantInvoiceNumber,
         reviewedBy: payment.reviewedBy,
         reviewedAt: payment.reviewedAt,
@@ -265,6 +274,80 @@ function formatPaymentUser(user) {
         bookedAt: user.bookedAt || null,
         paymentStatus: user.paymentStatus || 'unpaid'
     };
+}
+
+function money(value) {
+    return Math.round(Number(value) * 100) / 100;
+}
+
+function getOutstandingPaymentState(access, payments = []) {
+    if (!access?.hasClassAccess || access.paymentStatus !== 'partiallyPaid') {
+        return { remainingPayment: null, reason: 'not-partially-paid' };
+    }
+
+    const candidates = payments.filter((payment) => (
+        APPROVED_ACCESS_STATUSES.includes(payment.status)
+        && HOUSE_PLAN_IDS.includes(payment.planId)
+        && payment.paymentChoice === 'partial'
+        && !payment.fullyPaidAt
+        && Number(payment.remainingAmount) > 0
+    ));
+
+    if (candidates.length !== 1) {
+        return {
+            remainingPayment: null,
+            reason: candidates.length > 1 ? 'ambiguous' : 'missing'
+        };
+    }
+
+    const payment = candidates[0];
+    const totalAmount = money(payment.amount);
+    const paidAmount = money(payment.paidAmount);
+    const remainingAmount = money(totalAmount - paidAmount);
+    const storedRemainingAmount = money(payment.remainingAmount);
+
+    if (
+        !Number.isFinite(totalAmount)
+        || !Number.isFinite(paidAmount)
+        || !Number.isFinite(remainingAmount)
+        || totalAmount <= 0
+        || paidAmount <= 0
+        || remainingAmount <= 0
+        || Math.abs(remainingAmount - storedRemainingAmount) > 0.009
+    ) {
+        return { remainingPayment: null, reason: 'inconsistent' };
+    }
+
+    return {
+        reason: '',
+        payment,
+        remainingPayment: {
+            paymentId: payment._id,
+            planId: payment.planId,
+            planTitle: payment.planTitle,
+            totalAmount,
+            paidAmount,
+            remainingAmount,
+            currency: payment.currency || 'BDT'
+        }
+    };
+}
+
+async function getCurrentGeneralAccess(userId) {
+    return loadProgramAccess(userId);
+}
+
+async function rejectExistingGeneralEnrollment(req, res) {
+    const { access } = await getCurrentGeneralAccess(req.user._id);
+    if (!access.hasClassAccess) return false;
+
+    res.status(409).json({
+        success: false,
+        message: access.paymentStatus === 'partiallyPaid'
+            ? 'You are already enrolled. Pay the remaining installment from your dashboard overview.'
+            : 'You already have active class access for this program.'
+    });
+    return true;
 }
 
 function getPlanPaymentMeta(plan, paymentChoice) {
@@ -323,14 +406,21 @@ function isPaystationInitiateSuccess(payload = {}) {
         && Boolean(clean(payload.payment_url));
 }
 
-function verifyMathPaymentAmount(payment, payload = {}) {
-    if (!MATH_PLAN_IDS.includes(payment.planId)) return;
+function verifyExactPaymentAmount(expectedAmount, expectedInvoice, payload = {}) {
     const reported = payload.request_amount ?? payload.payment_amount;
-    const expected = payment.paidAmount || payment.amount;
-    if (reported === undefined || !Number.isFinite(Number(reported)) || Math.round(Number(reported) * 100) !== Math.round(expected * 100)) {
+    if (reported === undefined || !Number.isFinite(Number(reported)) || Math.round(Number(reported) * 100) !== Math.round(expectedAmount * 100)) {
         throw invalid('PayStation did not confirm the exact course price. Please contact support before paying.', 502);
     }
-    if (payload.invoice_number && payload.invoice_number !== payment.merchantInvoiceNumber) throw invalid('Payment invoice verification failed.', 502);
+    if (payload.invoice_number && payload.invoice_number !== expectedInvoice) throw invalid('Payment invoice verification failed.', 502);
+}
+
+function verifyMathPaymentAmount(payment, payload = {}) {
+    if (!MATH_PLAN_IDS.includes(payment.planId)) return;
+    verifyExactPaymentAmount(payment.paidAmount || payment.amount, payment.merchantInvoiceNumber, payload);
+}
+
+function verifyFinalPaymentAmount(payment, payload = {}) {
+    verifyExactPaymentAmount(payment.finalPaidAmount, payment.finalMerchantInvoiceNumber, payload);
 }
 
 function getCallbackPayload(req) {
@@ -440,6 +530,101 @@ async function startPaystationPayment({
     }
 }
 
+async function startFinalPaystationPayment({ user, payment, remainingPayment }) {
+    if (
+        ['initiated', 'processing'].includes(payment.finalPaystationStatus)
+        && clean(payment.finalPaystationPaymentUrl)
+        && money(payment.finalPaidAmount) === remainingPayment.remainingAmount
+    ) {
+        return { payment, paymentUrl: payment.finalPaystationPaymentUrl, reused: true };
+    }
+
+    const now = new Date();
+    const lockedPayment = await Payment.findOneAndUpdate({
+        _id: payment._id,
+        user: user._id,
+        remainingAmount: payment.remainingAmount,
+        $or: [
+            { finalCheckoutLockUntil: { $exists: false } },
+            { finalCheckoutLockUntil: null },
+            { finalCheckoutLockUntil: { $lte: now } }
+        ]
+    }, {
+        $set: { finalCheckoutLockUntil: new Date(now.getTime() + FINAL_CHECKOUT_LOCK_MS) }
+    }, { new: true });
+
+    if (!lockedPayment) {
+        const latest = await Payment.findById(payment._id);
+        if (
+            ['initiated', 'processing'].includes(latest?.finalPaystationStatus)
+            && clean(latest?.finalPaystationPaymentUrl)
+            && money(latest?.finalPaidAmount) === remainingPayment.remainingAmount
+        ) {
+            return { payment: latest, paymentUrl: latest.finalPaystationPaymentUrl, reused: true };
+        }
+        throw invalid('Your remaining-payment checkout is already being prepared. Please try again in a moment.', 409);
+    }
+
+    const detail = await EnrollmentDetail.findOne({ payment: lockedPayment._id }).lean();
+    const invoiceNumber = makeFinalInvoiceNumber(user._id);
+    lockedPayment.finalMerchantInvoiceNumber = invoiceNumber;
+    lockedPayment.finalPaymentMethod = PAYSTATION_METHOD;
+    lockedPayment.finalPaidAmount = remainingPayment.remainingAmount;
+    lockedPayment.finalPaystationStatus = 'initiated';
+    lockedPayment.finalPaystationPaymentUrl = '';
+    lockedPayment.finalFailureReason = '';
+    lockedPayment.finalRawCreateResponse = undefined;
+    await lockedPayment.save();
+
+    try {
+        const createResponse = await initiatePayment({
+            invoiceNumber,
+            amount: remainingPayment.remainingAmount,
+            customer: getPaystationCustomer(detail || {}, user),
+            reference: `${lockedPayment.planTitle} final installment`,
+            checkoutItems: {
+                service: 'Admission preparation program final installment',
+                mode: 'remaining-checkout',
+                paymentId: lockedPayment._id,
+                planId: lockedPayment.planId,
+                planTitle: lockedPayment.planTitle,
+                totalAmount: remainingPayment.totalAmount,
+                previouslyPaid: remainingPayment.paidAmount,
+                paidAmount: remainingPayment.remainingAmount,
+                remainingAmount: 0,
+                currency: lockedPayment.currency || 'BDT'
+            }
+        });
+
+        lockedPayment.finalRawCreateResponse = createResponse;
+        lockedPayment.finalPaystationPaymentUrl = clean(createResponse.payment_url);
+        lockedPayment.finalPaystationStatus = clean(createResponse.status).toLowerCase();
+
+        if (!isPaystationInitiateSuccess(createResponse)) {
+            lockedPayment.finalPaystationStatus = 'failed';
+            lockedPayment.finalFailureReason = createResponse.message || 'PayStation could not create the remaining-payment link.';
+            lockedPayment.finalCheckoutLockUntil = undefined;
+            await lockedPayment.save();
+            throw invalid(lockedPayment.finalFailureReason, 502);
+        }
+
+        verifyFinalPaymentAmount(lockedPayment, createResponse);
+        lockedPayment.finalPaystationStatus = 'initiated';
+        lockedPayment.finalCheckoutLockUntil = undefined;
+        await lockedPayment.save();
+        return { payment: lockedPayment, paymentUrl: lockedPayment.finalPaystationPaymentUrl, reused: false };
+    } catch (error) {
+        if (lockedPayment.finalPaystationStatus !== 'failed') {
+            lockedPayment.finalPaystationStatus = 'failed';
+            lockedPayment.finalFailureReason = error.message || 'Remaining-payment initiation failed.';
+            lockedPayment.finalRawCreateResponse = lockedPayment.finalRawCreateResponse || { error: error.message };
+            lockedPayment.finalCheckoutLockUntil = undefined;
+            await lockedPayment.save().catch(() => null);
+        }
+        throw error;
+    }
+}
+
 function applyPaystationStatus(payment, statusPayload, callbackPayload = {}) {
     const statusKind = getPaystationStatusKind(statusPayload);
     const transactionId = getTransactionId(statusPayload) || getTransactionId(callbackPayload);
@@ -480,10 +665,53 @@ function applyPaystationStatus(payment, statusPayload, callbackPayload = {}) {
     return { statusKind, shouldUnlock: false, shouldSendEmail: false };
 }
 
+function applyFinalPaystationStatus(payment, statusPayload, callbackPayload = {}) {
+    const statusKind = getPaystationStatusKind(statusPayload);
+    const transactionId = getTransactionId(statusPayload) || getTransactionId(callbackPayload);
+    const wasPaid = payment.finalPaystationStatus === 'success' && payment.remainingAmount === 0;
+
+    // Delayed gateway messages must not undo a verified installment. Refunds remain authoritative.
+    if (wasPaid && statusKind !== 'success' && statusKind !== 'refund') {
+        return { statusKind: 'success', shouldUnlock: true, shouldSendEmail: false };
+    }
+
+    payment.finalRawExecuteResponse = statusPayload;
+    payment.finalRawCallbackResponse = callbackPayload;
+    payment.finalPaystationStatus = statusKind;
+
+    if (transactionId) {
+        payment.finalPaystationTransactionId = transactionId;
+        payment.finalTrxID = transactionId;
+    }
+
+    if (statusKind === 'success') {
+        payment.remainingAmount = 0;
+        payment.fullyPaidAt = payment.fullyPaidAt || new Date();
+        payment.finalFailureReason = '';
+        return { statusKind, shouldUnlock: true, shouldSendEmail: !wasPaid };
+    }
+
+    if (statusKind === 'processing') {
+        payment.finalFailureReason = '';
+        return { statusKind, shouldUnlock: false, shouldSendEmail: false };
+    }
+
+    if (statusKind === 'refund') {
+        payment.remainingAmount = payment.finalPaidAmount;
+        payment.fullyPaidAt = undefined;
+        payment.finalFailureReason = statusPayload.message || callbackPayload.message || 'Final installment refunded.';
+        return { statusKind, shouldUnlock: false, shouldSendEmail: false };
+    }
+
+    payment.finalFailureReason = statusPayload.message || callbackPayload.message || `PayStation final payment ${statusKind}.`;
+    return { statusKind, shouldUnlock: false, shouldSendEmail: false };
+}
+
 exports.handlePaystationCallback = async (req, res) => {
     const callbackPayload = getCallbackPayload(req);
     const invoiceNumber = getCallbackInvoiceNumber(callbackPayload);
     const callbackTrxId = getTransactionId(callbackPayload);
+    let callbackPaymentStage = '';
 
     try {
         if (!invoiceNumber && !callbackTrxId) {
@@ -492,14 +720,20 @@ exports.handlePaystationCallback = async (req, res) => {
             }));
         }
 
-        const payment = invoiceNumber
+        let payment = invoiceNumber
             ? await Payment.findOne({ merchantInvoiceNumber: invoiceNumber })
             : await Payment.findOne({
                 $or: [
                     { paystationTransactionId: callbackTrxId },
-                    { trxIDNormalized: callbackTrxId.toUpperCase() }
+                    { trxIDNormalized: callbackTrxId.toUpperCase() },
+                    { finalPaystationTransactionId: callbackTrxId },
+                    { finalTrxIDNormalized: callbackTrxId.toUpperCase() }
                 ]
             });
+
+        if (!payment && invoiceNumber) {
+            payment = await Payment.findOne({ finalMerchantInvoiceNumber: invoiceNumber });
+        }
 
         if (!payment) {
             return res.redirect(buildFrontendRedirect('/payment/failed', {
@@ -508,13 +742,25 @@ exports.handlePaystationCallback = async (req, res) => {
             }));
         }
 
+        const isFinalInstallment = (
+            (invoiceNumber && payment.finalMerchantInvoiceNumber === invoiceNumber)
+            || (!invoiceNumber && callbackTrxId && [payment.finalPaystationTransactionId, payment.finalTrxID]
+                .filter(Boolean)
+                .some((value) => value.toUpperCase() === callbackTrxId.toUpperCase()))
+        );
+        callbackPaymentStage = isFinalInstallment ? 'final' : 'initial';
         const statusResponse = await queryTransactionStatus({
-            invoiceNumber: payment.merchantInvoiceNumber,
-            trxId: callbackTrxId || payment.paystationTransactionId
+            invoiceNumber: isFinalInstallment ? payment.finalMerchantInvoiceNumber : payment.merchantInvoiceNumber,
+            trxId: callbackTrxId || (isFinalInstallment ? payment.finalPaystationTransactionId : payment.paystationTransactionId)
         });
         const statusPayload = getStatusPayload(statusResponse);
-        if (getPaystationStatusKind(statusPayload) === 'success') verifyMathPaymentAmount(payment, statusPayload);
-        const result = applyPaystationStatus(payment, statusPayload, callbackPayload);
+        if (getPaystationStatusKind(statusPayload) === 'success') {
+            if (isFinalInstallment) verifyFinalPaymentAmount(payment, statusPayload);
+            else verifyMathPaymentAmount(payment, statusPayload);
+        }
+        const result = isFinalInstallment
+            ? applyFinalPaystationStatus(payment, statusPayload, callbackPayload)
+            : applyPaystationStatus(payment, statusPayload, callbackPayload);
 
         await payment.save();
         if (!result.shouldUnlock) await syncUserPaymentAccess(payment.user);
@@ -537,11 +783,12 @@ exports.handlePaystationCallback = async (req, res) => {
 
             return res.redirect(buildFrontendRedirect('/payment/success', {
                 paymentId: payment._id,
-                invoice: payment.merchantInvoiceNumber,
+                invoice: isFinalInstallment ? payment.finalMerchantInvoiceNumber : payment.merchantInvoiceNumber,
                 status: 'paid',
                 plan: payment.planId,
-                paymentChoice: payment.paymentChoice,
-                remainingAmount: payment.remainingAmount
+                paymentChoice: isFinalInstallment ? 'final' : payment.paymentChoice,
+                remainingAmount: payment.remainingAmount,
+                paymentStage: isFinalInstallment ? 'final' : 'initial'
             }));
         }
 
@@ -549,13 +796,15 @@ exports.handlePaystationCallback = async (req, res) => {
             paymentId: payment._id,
             invoice: payment.merchantInvoiceNumber,
             status: payment.status,
-            reason: result.statusKind
+            reason: result.statusKind,
+            paymentStage: callbackPaymentStage
         }));
     } catch (error) {
         console.error('PayStation callback failed:', error.message);
         return res.redirect(buildFrontendRedirect('/payment/failed', {
             invoice: invoiceNumber,
-            reason: 'verification-failed'
+            reason: 'verification-failed',
+            paymentStage: callbackPaymentStage
         }));
     }
 };
@@ -637,6 +886,7 @@ async function submitMathEnrollment(req, res) {
 exports.submitManualEnrollment = async (req, res) => {
     if (MATH_PLAN_IDS.includes(req.body.planId)) return submitMathEnrollment(req, res);
     try {
+        if (await rejectExistingGeneralEnrollment(req, res)) return;
         const { planId, formData } = req.body;
         const paymentChoice = getPaymentChoice(req.body.paymentChoice);
         const plan = getPaymentPlan(planId);
@@ -722,6 +972,7 @@ exports.submitManualEnrollment = async (req, res) => {
 
 exports.submitSeatBooking = async (req, res) => {
     try {
+        if (await rejectExistingGeneralEnrollment(req, res)) return;
         const { planId, formData } = req.body;
         const plan = getPaymentPlan(planId);
 
@@ -811,6 +1062,7 @@ exports.getMyBooking = async (req, res) => {
 
 exports.submitBookedCheckout = async (req, res) => {
     try {
+        if (await rejectExistingGeneralEnrollment(req, res)) return;
         const paymentChoice = getPaymentChoice(req.body.paymentChoice);
         const booking = await SeatBooking.findOne({ user: req.user._id }).lean();
 
@@ -865,6 +1117,58 @@ exports.submitBookedCheckout = async (req, res) => {
     }
 };
 
+exports.submitRemainingCheckout = async (req, res) => {
+    try {
+        if (req.user.role === 'admin') {
+            return res.status(403).json({ success: false, message: 'Remaining-payment checkout is only available to student accounts.' });
+        }
+
+        const { user, payments, access } = await getCurrentGeneralAccess(req.user._id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Student account was not found.' });
+        }
+        if (!access.hasClassAccess) {
+            return res.status(403).json({ success: false, message: 'An approved partial enrollment is required before paying a remaining installment.' });
+        }
+        if (access.paymentStatus !== 'partiallyPaid') {
+            return res.status(409).json({ success: false, message: 'This enrollment does not have an outstanding installment.' });
+        }
+
+        const state = getOutstandingPaymentState(access, payments);
+        if (!state.remainingPayment) {
+            const message = state.reason === 'ambiguous'
+                ? 'Multiple outstanding enrollment payments were found. Please contact support before paying.'
+                : 'Your remaining balance could not be verified. Please contact support before paying.';
+            return res.status(409).json({ success: false, message });
+        }
+
+        const payment = await Payment.findById(state.payment._id);
+        if (!payment || payment.user.toString() !== user._id.toString()) {
+            return res.status(404).json({ success: false, message: 'The original enrollment payment was not found.' });
+        }
+
+        const checkout = await startFinalPaystationPayment({
+            user,
+            payment,
+            remainingPayment: state.remainingPayment
+        });
+
+        return res.status(checkout.reused ? 200 : 201).json({
+            success: true,
+            message: checkout.reused ? 'Existing remaining-payment checkout returned.' : 'Remaining-payment checkout created.',
+            data: {
+                ...state.remainingPayment,
+                paymentUrl: checkout.paymentUrl,
+                invoice: checkout.payment.finalMerchantInvoiceNumber,
+                status: checkout.payment.finalPaystationStatus
+            }
+        });
+    } catch (error) {
+        const status = error.statusCode || (error.name === 'ValidationError' ? 400 : 500);
+        return res.status(status).json({ success: false, message: error.message });
+    }
+};
+
 exports.getPaymentAccess = async (req, res) => {
     try {
         if (req.user.role === 'admin') {
@@ -874,6 +1178,7 @@ exports.getPaymentAccess = async (req, res) => {
                     hasMathAccess: true,
                 hasClassAccess: true,
                     paymentStatus: 'fullyPaid',
+                    remainingPayment: null,
                     house: req.user.house || '',
                     hasBooked: Boolean(req.user.hasBooked),
                     bookedPlanId: req.user.bookedPlanId || '',
@@ -883,7 +1188,11 @@ exports.getPaymentAccess = async (req, res) => {
         }
 
         const access = await syncUserPaymentAccess(req.user._id);
-        const booking = await SeatBooking.findOne({ user: req.user._id }).select('planId createdAt').lean();
+        const [booking, payments] = await Promise.all([
+            SeatBooking.findOne({ user: req.user._id }).select('planId createdAt').lean(),
+            Payment.find({ user: req.user._id, status: { $in: APPROVED_STATUSES } }).sort({ createdAt: 1 }).lean()
+        ]);
+        const { remainingPayment } = getOutstandingPaymentState(access, payments);
 
         res.status(200).json({
             success: true,
@@ -891,6 +1200,7 @@ exports.getPaymentAccess = async (req, res) => {
                 ...access,
                 hasClassAccess: access.hasClassAccess,
                 paymentStatus: access.paymentStatus,
+                remainingPayment,
                 house: access.house,
                 hasBooked: Boolean(booking || req.user.hasBooked),
                 bookedPlanId: booking?.planId || req.user.bookedPlanId || '',
@@ -1086,6 +1396,8 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
         }
 
         payment.finalTrxID = finalTrxID;
+        payment.finalPaymentMethod = 'bkash';
+        payment.finalPaidAmount = payment.remainingAmount;
         payment.remainingAmount = 0;
         payment.fullyPaidAt = new Date();
         payment.reviewedBy = req.user._id;
@@ -1123,6 +1435,7 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
 
 exports._private = {
     verifyMathPaymentAmount,
+    verifyFinalPaymentAmount,
     validateMathSurvey,
     getPaymentChoice,
     getPaymentMethod,
@@ -1130,5 +1443,7 @@ exports._private = {
     getCallbackInvoiceNumber,
     getStatusPayload,
     isPaystationInitiateSuccess,
-    applyPaystationStatus
+    applyPaystationStatus,
+    applyFinalPaystationStatus,
+    getOutstandingPaymentState
 };

@@ -224,3 +224,88 @@ test('paystation nested cancelled processing and refund statuses do not unlock a
         assert.equal(payment.status, expectedStatus);
     });
 });
+
+test('remaining balances use the original payment snapshot for every house price', () => {
+    const access = { hasClassAccess: true, paymentStatus: 'partiallyPaid' };
+    for (const [planId, amount, expectedRemaining] of [
+        ['offline', 18000, 8000],
+        ['gryffindor2', 18000, 8000],
+        ['online', 18000, 8000],
+        ['premium', 17500, 7500]
+    ]) {
+        const payment = {
+            _id: `${planId}-payment`,
+            planId,
+            planTitle: planId,
+            amount,
+            paidAmount: 10000,
+            remainingAmount: expectedRemaining,
+            paymentChoice: 'partial',
+            status: 'paid',
+            currency: 'BDT'
+        };
+        const state = _private.getOutstandingPaymentState(access, [payment]);
+        assert.equal(state.remainingPayment.totalAmount, amount);
+        assert.equal(state.remainingPayment.paidAmount, 10000);
+        assert.equal(state.remainingPayment.remainingAmount, expectedRemaining);
+    }
+});
+
+test('remaining checkout is hidden for ineligible ambiguous or inconsistent records', () => {
+    const payment = {
+        _id: 'payment-1', planId: 'offline', planTitle: 'Gryffindor', amount: 18000,
+        paidAmount: 10000, remainingAmount: 8000, paymentChoice: 'partial', status: 'approved'
+    };
+    assert.equal(_private.getOutstandingPaymentState({ hasClassAccess: false, paymentStatus: 'partiallyPaid' }, [payment]).remainingPayment, null);
+    assert.equal(_private.getOutstandingPaymentState({ hasClassAccess: true, paymentStatus: 'fullyPaid' }, [payment]).remainingPayment, null);
+    assert.equal(_private.getOutstandingPaymentState({ hasClassAccess: true, paymentStatus: 'partiallyPaid' }, []).reason, 'missing');
+    assert.equal(_private.getOutstandingPaymentState({ hasClassAccess: true, paymentStatus: 'partiallyPaid' }, [payment, { ...payment, _id: 'payment-2' }]).reason, 'ambiguous');
+    assert.equal(_private.getOutstandingPaymentState({ hasClassAccess: true, paymentStatus: 'partiallyPaid' }, [{ ...payment, remainingAmount: 7000 }]).reason, 'inconsistent');
+});
+
+test('successful final installment settles once and a refund restores only the balance', () => {
+    const payment = {
+        paymentChoice: 'partial',
+        remainingAmount: 8000,
+        finalPaidAmount: 8000,
+        finalPaystationStatus: 'initiated'
+    };
+    const success = _private.applyFinalPaystationStatus(payment, { status: 'success', trxId: 'FINAL-1' });
+    assert.equal(success.shouldUnlock, true);
+    assert.equal(success.shouldSendEmail, true);
+    assert.equal(payment.remainingAmount, 0);
+    assert.equal(payment.finalTrxID, 'FINAL-1');
+    assert.ok(payment.fullyPaidAt instanceof Date);
+
+    const duplicate = _private.applyFinalPaystationStatus(payment, { status: 'success', trxId: 'FINAL-1' });
+    assert.equal(duplicate.shouldSendEmail, false);
+    assert.equal(payment.remainingAmount, 0);
+
+    const delayedFailure = _private.applyFinalPaystationStatus(payment, { status: 'failed' });
+    assert.equal(delayedFailure.statusKind, 'success');
+    assert.equal(payment.remainingAmount, 0);
+
+    const refund = _private.applyFinalPaystationStatus(payment, { status: 'refund', trxId: 'FINAL-1' });
+    assert.equal(refund.shouldUnlock, false);
+    assert.equal(payment.remainingAmount, 8000);
+    assert.equal(payment.fullyPaidAt, undefined);
+});
+
+test('final installment verification rejects browser or gateway amount changes', () => {
+    const payment = {
+        finalPaidAmount: 7500,
+        finalMerchantInvoiceNumber: 'MMS-FIN-1'
+    };
+    assert.doesNotThrow(() => _private.verifyFinalPaymentAmount(payment, {
+        invoice_number: 'MMS-FIN-1',
+        payment_amount: 7500
+    }));
+    assert.throws(() => _private.verifyFinalPaymentAmount(payment, {
+        invoice_number: 'MMS-FIN-1',
+        payment_amount: 1
+    }), /exact course price/);
+    assert.throws(() => _private.verifyFinalPaymentAmount(payment, {
+        invoice_number: 'MMS-FIN-WRONG',
+        payment_amount: 7500
+    }), /invoice verification/);
+});
