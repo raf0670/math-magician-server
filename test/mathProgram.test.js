@@ -163,6 +163,24 @@ test('new memberships receive no missed-exam penalties for pre-access exams', ()
     assert.equal(isPenaltyEligibleForMembership({ startTime: new Date('2026-09-11') }, user, 'general'), true);
     assert.equal(isPenaltyEligibleForMembership({ startTime: new Date('2026-09-01') }, {}, 'general'), true);
 });
+test('general suspension preserves historical penalties and prevents new ones', () => {
+    const user = {
+        generalAccessSuspended: true,
+        generalAccessSuspendedAt: new Date('2026-09-15T12:00:00Z')
+    };
+    assert.equal(isPenaltyEligibleForMembership({
+        startTime: new Date('2026-09-14T10:00:00Z'),
+        endTime: new Date('2026-09-15T11:59:59Z')
+    }, user, 'general'), true);
+    assert.equal(isPenaltyEligibleForMembership({
+        startTime: new Date('2026-09-15T10:00:00Z'),
+        endTime: new Date('2026-09-15T13:00:00Z')
+    }, user, 'general'), false);
+    assert.equal(isPenaltyEligibleForMembership({
+        startTime: new Date('2026-09-16T10:00:00Z'),
+        endTime: new Date('2026-09-16T11:00:00Z')
+    }, { generalAccessSuspended: true }, 'general'), false);
+});
 test('math authoring rejects other subjects while preserving daily and full-length timing', () => {
     const question = { subject: 'Maths', question: '2 + 2?', options: ['1','2','3','4','5'], correct_answer: '4', explanation: 'Two plus two is four.' };
     const body = { program: 'math', title: 'Math exam', startTime: '2026-09-10T12:00:00Z', endTime: '2026-09-10T13:30:00Z', questions: [question] };

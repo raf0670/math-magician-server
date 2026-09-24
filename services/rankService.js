@@ -222,7 +222,17 @@ function applyMissingPenaltiesForEligibleStudents(totalsByStudentId, submissions
 
 function isPenaltyEligibleForMembership(exam, user, program = 'general') {
     const startsAt = program === 'math' ? user.mathAccessStartsAt : user.generalAccessStartsAt;
-    return !startsAt || (exam.startTime && new Date(exam.startTime) >= new Date(startsAt));
+    const startedDuringMembership = !startsAt || (exam.startTime && new Date(exam.startTime) >= new Date(startsAt));
+    if (!startedDuringMembership) return false;
+
+    if (programOf(program) === 'general' && user.generalAccessSuspended) {
+        const suspendedAt = user.generalAccessSuspendedAt ? new Date(user.generalAccessSuspendedAt) : null;
+        const examEndTime = exam.endTime ? new Date(exam.endTime) : null;
+        if (!suspendedAt || Number.isNaN(suspendedAt.getTime())) return false;
+        if (!examEndTime || Number.isNaN(examEndTime.getTime()) || examEndTime > suspendedAt) return false;
+    }
+
+    return true;
 }
 
 async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [], studentIds = [], options = {}) {
@@ -235,16 +245,17 @@ async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [
         User.find({
             _id: { $in: normalizedStudentIds },
             role: 'student',
-            [program === 'math' ? 'hasMathAccess' : 'hasClassAccess']: true,
-            ...(program === 'math' ? {} : { generalAccessSuspended: { $ne: true } })
-        }).select('_id mathAccessStartsAt generalAccessStartsAt').lean(),
+            ...(program === 'math'
+                ? { hasMathAccess: true }
+                : { $or: [{ hasClassAccess: true }, { generalAccessSuspended: true }] })
+        }).select('_id mathAccessStartsAt generalAccessStartsAt generalAccessSuspended generalAccessSuspendedAt').lean(),
         program === 'math' ? Promise.resolve([]) : Exam.find({
             ...programFilter(program),
             examType: 'assignment',
             isLiveExam: true,
             endTime: { $lte: now },
             totalMarks: { $gt: 0 }
-        }).select('_id startTime').lean(),
+        }).select('_id startTime endTime').lean(),
         Exam.find({
             ...programFilter(program),
             isLiveExam: true,
@@ -255,7 +266,7 @@ async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [
             competitionCategory: 'daily',
             endTime: { $lte: now },
             totalMarks: { $gt: 0 }
-        }).select('_id startTime').lean()
+        }).select('_id startTime endTime').lean()
     ]);
 
     const penaltyExams = [
