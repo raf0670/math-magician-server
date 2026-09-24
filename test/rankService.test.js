@@ -166,6 +166,54 @@ test('retake submissions do not increment counted exam totals', () => {
     assert.deepEqual(totals.get('student-1'), { points: 42, countedExamCount: 1 });
 });
 
+test('Slytherin doubles positive general RP without changing normal-house or negative RP', () => {
+    const exam = {
+        examType: 'assessment',
+        isLiveExam: true,
+        startTime: new Date('2026-08-16T15:00:00.000Z'),
+        totalMarks: 60
+    };
+    const totals = _private.buildRankTotalsFromSubmissions([
+        { student: 'normal-student', exam, score: 5 },
+        { student: 'slytherin-student', exam, score: 5 },
+        { student: 'slytherin-negative', exam, score: -5 }
+    ], ['normal-student', 'slytherin-student', 'slytherin-negative'], {
+        now: new Date('2026-08-16T17:00:00.000Z'),
+        slytherinStudentIds: new Set(['slytherin-student', 'slytherin-negative'])
+    });
+
+    assert.deepEqual(totals.get('normal-student'), { points: 5, countedExamCount: 1 });
+    assert.deepEqual(totals.get('slytherin-student'), { points: 10, countedExamCount: 1 });
+    assert.deepEqual(totals.get('slytherin-negative'), { points: -5, countedExamCount: 1 });
+});
+
+test('Slytherin multiplier does not apply to math RP', () => {
+    const exam = {
+        program: 'math',
+        examType: 'assessment',
+        isLiveExam: true,
+        startTime: new Date('2026-08-16T15:00:00.000Z'),
+        totalMarks: 60
+    };
+    const totals = _private.buildRankTotalsFromSubmissions([
+        { student: 'slytherin-student', exam, score: 5 }
+    ], ['slytherin-student'], {
+        program: 'math',
+        now: new Date('2026-08-16T17:00:00.000Z'),
+        slytherinStudentIds: new Set(['slytherin-student'])
+    });
+
+    assert.deepEqual(totals.get('slytherin-student'), { points: 5, countedExamCount: 1 });
+});
+
+test('new Slytherin members remain at zero RP without eligible submissions', () => {
+    const totals = _private.buildRankTotalsFromSubmissions([], ['slytherin-student'], {
+        slytherinStudentIds: new Set(['slytherin-student'])
+    });
+
+    assert.deepEqual(totals.get('slytherin-student'), { points: 0, countedExamCount: 0 });
+});
+
 test('completed assignment submission gives two rank points after deadline', () => {
     const exam = {
         examType: 'assignment',
@@ -181,6 +229,23 @@ test('completed assignment submission gives two rank points after deadline', () 
 
     assert.equal(shouldCountExam(exam, new Date('2026-08-24T18:00:00.000Z')), true);
     assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-24T18:00:00.000Z')), 2);
+});
+
+test('Slytherin completed assignments receive four general RP', () => {
+    const exam = {
+        examType: 'assignment',
+        isLiveExam: true,
+        endTime: new Date('2026-08-24T17:59:59.999Z'),
+        totalMarks: 3
+    };
+    const totals = _private.buildRankTotalsFromSubmissions([
+        { student: 'slytherin-student', exam, answers: [0, 1, 2], score: 1 }
+    ], ['slytherin-student'], {
+        now: new Date('2026-08-24T18:00:00.000Z'),
+        slytherinStudentIds: new Set(['slytherin-student'])
+    });
+
+    assert.deepEqual(totals.get('slytherin-student'), { points: 4, countedExamCount: 1 });
 });
 
 test('unfinished assignment submission gives zero rank points', () => {
@@ -263,6 +328,19 @@ test('missing daily live exam applies minus five rank points to eligible student
     );
 
     assert.deepEqual(totals.get('student-1'), { points: -5, countedExamCount: 1 });
+});
+
+test('Slytherin missed-work penalties remain minus five after doubled rewards', () => {
+    const totals = new Map([['slytherin-student', { points: 10, countedExamCount: 1 }]]);
+
+    _private.applyMissingPenaltiesForEligibleStudents(
+        totals,
+        [],
+        ['slytherin-student'],
+        [{ _id: 'daily-exam-1', penalty: -5 }]
+    );
+
+    assert.deepEqual(totals.get('slytherin-student'), { points: 5, countedExamCount: 2 });
 });
 
 test('submitted daily live exams do not receive missing-exam penalties', () => {

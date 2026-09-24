@@ -28,7 +28,10 @@ test('math scores, retakes and disqualifications stay isolated from general hous
     t.mock.method(Submission, 'find', filter => query(results.filter(result => (
         filter.exam ? filter.exam.$in.includes(result.exam._id) && !result.isRetake : filter.student.$in.includes(result.student._id)
     ))));
-    t.mock.method(User, 'find', filter => query(users.filter(user => (!filter._id || filter._id.$in.includes(user._id)) && (filter.hasMathAccess ? user.hasMathAccess : user.hasClassAccess))));
+    t.mock.method(User, 'find', filter => query(users.filter(user => (
+        (!filter._id || filter._id.$in.includes(user._id))
+        && (filter.hasMathAccess ? user.hasMathAccess : user.hasClassAccess)
+    ))));
 
     const before = await getCompetitionData();
     results = [...generalResults, row(users[0], math, 20), row(users[1], math, 18), row(users[2], math, 19), row(users[2], math, 20, { isRetake: true }), row(users[0], math, 20, { isDisqualified: true })];
@@ -36,7 +39,7 @@ test('math scores, retakes and disqualifications stay isolated from general hous
     assert.deepEqual(after, before, 'Adding math results must leave every general total, rank, badge and house result unchanged');
     assert.equal(after.houseStandings.find(house => house.name === 'Gryffindor').totalPoints, 10);
     assert.equal(after.houseStandings.find(house => house.name === 'Slytherin').totalPoints, 16);
-    assert.equal(after.leaderboard.find(student => student.studentId === 'bundle').rankInfo.rankPoints, 8);
+    assert.equal(after.leaderboard.find(student => student.studentId === 'bundle').rankInfo.rankPoints, 16);
 
     const competition = await getCompetitionData('math');
     assert.equal(competition.leaderboard.length, 4);

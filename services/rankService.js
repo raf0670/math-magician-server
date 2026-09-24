@@ -15,6 +15,7 @@ const CATEGORY_MAX_POINTS = {
 const ASSIGNMENT_COMPLETE_POINTS = 2;
 const ASSIGNMENT_MISSING_POINTS = -5;
 const DAILY_LIVE_EXAM_MISSING_POINTS = -5;
+const SLYTHERIN_GENERAL_REWARD_MULTIPLIER = 2;
 
 const RANK_LADDER = RANK_TIERS.flatMap((tier) => (
     RANK_LEVELS.map((level) => ({ tier, level, rankName: `${tier} ${level}` }))
@@ -155,6 +156,13 @@ function getMissingAssignmentRankPoints() {
     return ASSIGNMENT_MISSING_POINTS;
 }
 
+function getPositiveRewardMultiplier(studentId, rankPoints, options = {}) {
+    if (programOf(options.program) === 'math' || rankPoints <= 0) return 1;
+    return options.slytherinStudentIds?.has(studentId)
+        ? SLYTHERIN_GENERAL_REWARD_MULTIPLIER
+        : 1;
+}
+
 function buildRankTotalsFromSubmissions(submissions = [], studentIds = [], options = {}) {
     const now = options.now || new Date();
     const totalsByStudentId = new Map();
@@ -172,7 +180,7 @@ function buildRankTotalsFromSubmissions(submissions = [], studentIds = [], optio
         if (rankPoints === null) continue;
 
         const current = totalsByStudentId.get(studentId) || { points: 0, countedExamCount: 0 };
-        current.points += rankPoints;
+        current.points += rankPoints * getPositiveRewardMultiplier(studentId, rankPoints, options);
         current.countedExamCount += 1;
         totalsByStudentId.set(studentId, current);
     }
@@ -241,14 +249,18 @@ async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [
     if (!normalizedStudentIds.length) return totalsByStudentId;
 
     const program = programOf(options.program);
-    const [eligibleUsers, assignments, dailyLiveExams] = await Promise.all([
-        User.find({
+    const eligibleUsersPromise = options.eligibleUsers
+        ? Promise.resolve(options.eligibleUsers)
+        : User.find({
             _id: { $in: normalizedStudentIds },
             role: 'student',
             ...(program === 'math'
                 ? { hasMathAccess: true }
                 : { $or: [{ hasClassAccess: true }, { generalAccessSuspended: true }] })
-        }).select('_id mathAccessStartsAt generalAccessStartsAt generalAccessSuspended generalAccessSuspendedAt').lean(),
+        }).select('_id house mathAccessStartsAt generalAccessStartsAt generalAccessSuspended generalAccessSuspendedAt').lean();
+
+    const [eligibleUsers, assignments, dailyLiveExams] = await Promise.all([
+        eligibleUsersPromise,
         program === 'math' ? Promise.resolve([]) : Exam.find({
             ...programFilter(program),
             examType: 'assignment',
@@ -285,12 +297,33 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
     const normalizedStudentIds = [...new Set(studentIds.map((value) => value?.toString()).filter(Boolean))];
     if (!normalizedStudentIds.length) return new Map();
 
-    const submissions = await Submission.find({ student: { $in: normalizedStudentIds } })
-        .populate('exam', 'program totalMarks competitionCategory isLiveExam examType startTime endTime')
-        .lean();
+    const program = programOf(options.program);
+    const [submissions, eligibleUsers] = await Promise.all([
+        Submission.find({ student: { $in: normalizedStudentIds } })
+            .populate('exam', 'program totalMarks competitionCategory isLiveExam examType startTime endTime')
+            .lean(),
+        User.find({
+            _id: { $in: normalizedStudentIds },
+            role: 'student',
+            ...(program === 'math'
+                ? { hasMathAccess: true }
+                : { $or: [{ hasClassAccess: true }, { generalAccessSuspended: true }] })
+        }).select('_id house mathAccessStartsAt generalAccessStartsAt generalAccessSuspended generalAccessSuspendedAt').lean()
+    ]);
 
-    const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, normalizedStudentIds, options);
-    await applyMissingRankPointPenalties(totalsByStudentId, submissions, normalizedStudentIds, options);
+    const rankOptions = {
+        ...options,
+        program,
+        eligibleUsers,
+        slytherinStudentIds: new Set(
+            program === 'general'
+                ? eligibleUsers.filter((user) => user.house === 'Slytherin').map((user) => user._id.toString())
+                : []
+        )
+    };
+
+    const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, normalizedStudentIds, rankOptions);
+    await applyMissingRankPointPenalties(totalsByStudentId, submissions, normalizedStudentIds, rankOptions);
 
     return new Map([...totalsByStudentId.entries()].map(([studentId, total]) => [
         studentId,

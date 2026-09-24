@@ -38,7 +38,7 @@ Configure the 12 Basic and 12 Archive links in `config/contentCatalog.js` under 
 - Class scheduling: `/dashboard/admin/classes`, with a program selector and the existing Zoom workflow.
 - Enrollment review: `/dashboard/admin/enrollments`, with math/package filters, survey answers, price/discount breakdowns, and upgrade records.
 - Math authoring uses the existing live-exam question source, excluded from generated practice pools.
-- Math competition includes math enrollees across all houses and math-only students. Math scores, RP, badges, and missed-exam penalties stay separate. Math leaderboards expose no house positions. General exams taken by Slytherin members contribute to Slytherin; original-house students retain their original house contribution.
+- Math competition includes math enrollees across all houses and math-only students. Math scores, RP, badges, and missed-exam penalties stay separate. Math leaderboards expose no house positions. Positive general-program RP rewards earned by current Slytherin members receive a 2x multiplier; penalties, Math RP, exam scores, badges, and house points remain unchanged. General exams taken by Slytherin members contribute to Slytherin; original-house students retain their original house contribution.
 
 ## Validation and release notes
 
