@@ -192,6 +192,22 @@ test('payment access exposes the verified historical remaining balance', async (
     });
 });
 
+test('general suspension blocks re-enrollment and remaining-payment checkout without changing the payment', async () => {
+    user.generalAccessSuspended = true;
+    const originalStatus = payment.status;
+    const originalPaidAmount = payment.paidAmount;
+
+    const enrollmentGuard = await call(controller._private.rejectExistingGeneralEnrollment);
+    assert.equal(enrollmentGuard.status, 403);
+    assert.match(enrollmentGuard.message, /suspended/i);
+
+    const checkout = await call(controller.submitRemainingCheckout);
+    assert.equal(checkout.status, 403);
+    assert.match(checkout.message, /suspended/i);
+    assert.equal(payment.status, originalStatus);
+    assert.equal(payment.paidAmount, originalPaidAmount);
+});
+
 test('verified final callback marks fully paid and a refund restores partial access', async () => {
     const checkout = await call(controller.submitRemainingCheckout);
     assert.equal(checkout.status, 201);

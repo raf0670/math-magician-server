@@ -287,7 +287,7 @@ function formatPaymentUser(user) {
         role: user.role,
         house: user.house || '',
         bio: user.bio || '',
-        hasClassAccess: Boolean(user.hasClassAccess),
+        hasClassAccess: Boolean(user.hasClassAccess) && !user.generalAccessSuspended,
         hasMathAccess: Boolean(user.hasMathAccess),
         mathPaymentStatus: user.mathPaymentStatus || 'unpaid',
         mathAccessStartsAt: user.mathAccessStartsAt || null,
@@ -362,6 +362,13 @@ async function getCurrentGeneralAccess(userId) {
 
 async function rejectExistingGeneralEnrollment(req, res) {
     const { access } = await getCurrentGeneralAccess(req.user._id);
+    if (access.generalAccessSuspended) {
+        res.status(403).json({
+            success: false,
+            message: 'General course access is suspended for this account. Please contact support.'
+        });
+        return true;
+    }
     if (!access.hasClassAccess) return false;
 
     res.status(409).json({
@@ -1458,6 +1465,9 @@ exports.submitRemainingCheckout = async (req, res) => {
         if (!user) {
             return res.status(404).json({ success: false, message: 'Student account was not found.' });
         }
+        if (access.generalAccessSuspended) {
+            return res.status(403).json({ success: false, message: 'General course access is suspended for this account. Please contact support.' });
+        }
         if (!access.hasClassAccess) {
             return res.status(403).json({ success: false, message: 'An approved partial enrollment is required before paying a remaining installment.' });
         }
@@ -1788,5 +1798,6 @@ exports._private = {
     isPaystationInitiateSuccess,
     applyPaystationStatus,
     applyFinalPaystationStatus,
-    getOutstandingPaymentState
+    getOutstandingPaymentState,
+    rejectExistingGeneralEnrollment
 };

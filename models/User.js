@@ -67,6 +67,19 @@ const UserSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    generalAccessSuspended: {
+        type: Boolean,
+        default: false
+    },
+    generalAccessSuspendedAt: {
+        type: Date,
+        default: null
+    },
+    generalAccessSuspensionReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
     hasMathAccess: { type: Boolean, default: false, index: true },
     mathPaymentStatus: { type: String, enum: ['unpaid', 'fullyPaid'], default: 'unpaid' },
     mathAccessStartsAt: { type: Date, default: null },

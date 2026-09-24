@@ -235,7 +235,8 @@ async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [
         User.find({
             _id: { $in: normalizedStudentIds },
             role: 'student',
-            [program === 'math' ? 'hasMathAccess' : 'hasClassAccess']: true
+            [program === 'math' ? 'hasMathAccess' : 'hasClassAccess']: true,
+            ...(program === 'math' ? {} : { generalAccessSuspended: { $ne: true } })
         }).select('_id mathAccessStartsAt generalAccessStartsAt').lean(),
         program === 'math' ? Promise.resolve([]) : Exam.find({
             ...programFilter(program),

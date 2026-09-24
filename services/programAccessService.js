@@ -16,11 +16,13 @@ function deriveProgramAccess(user = {}, payments = []) {
     const approved = payments.filter(p => APPROVED_STATUSES.includes(p.status));
     const math = approved.filter(p => ['math', 'mathSlytherin'].includes(p.planId));
     const general = approved.filter(p => p.planId !== 'math');
+    const generalAccessSuspended = Boolean(user.generalAccessSuspended);
     const originalHouses = general.filter(p => HOUSE_PLAN_IDS.includes(p.planId));
     const housePayment = originalHouses.find(p => getHouseFromPlanId(p.planId) === user.house) || originalHouses[0];
     const slytherin = general.filter(p => ['mathSlytherin', 'slytherinUpgrade'].includes(p.planId));
     return {
-        hasClassAccess: general.length > 0,
+        hasClassAccess: general.length > 0 && !generalAccessSuspended,
+        generalAccessSuspended,
         hasMathAccess: math.length > 0,
         house: housePayment ? getHouseFromPlanId(housePayment.planId) : slytherin.length ? 'Slytherin' : general.length ? user.house || '' : '',
         paymentStatus: paymentStatus(general.length ? general : math),

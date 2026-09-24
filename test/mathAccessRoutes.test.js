@@ -92,6 +92,11 @@ test('math-only students cannot bypass general practice, quizzes, assignments, o
         ['assessment','get','/'], ['assessment','get','/exam'], ['assessment','post','/submit']
     ]) assert.equal((await request(router, method, path, user, {}, { program: 'math' })).status, 403);
 });
+test('general suspension overrides a stale class-access flag without affecting math access', async () => {
+    const user = { hasClassAccess: true, generalAccessSuspended: true, hasMathAccess: true };
+    assert.equal((await request('exams', 'get', '/live', user, {}, { program: 'general' })).status, 403);
+    assert.equal((await request('exams', 'get', '/live', user, {}, { program: 'math' })).status, 200);
+});
 test('student memberships cannot access authoring or moderation routes', async () => {
     const user = { hasMathAccess: true, hasClassAccess: true };
     for (const [router, method, path] of [

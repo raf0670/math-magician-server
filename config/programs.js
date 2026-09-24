@@ -9,6 +9,8 @@ function programFilter(program = 'general') {
     return { program: programOf(program) === 'math' ? 'math' : { $ne: 'math' } };
 }
 function canAccessProgram(user, program = 'general') {
-    return user?.role === 'admin' || Boolean(programOf(program) === 'math' ? user?.hasMathAccess : user?.hasClassAccess);
+    if (user?.role === 'admin') return true;
+    if (programOf(program) === 'math') return Boolean(user?.hasMathAccess);
+    return Boolean(user?.hasClassAccess) && !user?.generalAccessSuspended;
 }
 module.exports = { MATH_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES, PREPARATION_METHODS, MATH_WEAKNESSES, programOf, programFilter, canAccessProgram };

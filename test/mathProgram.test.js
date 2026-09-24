@@ -43,6 +43,29 @@ test('math payment preserves house membership and partially-paid general balance
     assert.equal(house.remainingAmount, 8000);
     assert.equal(access.generalAccessStartsAt, null);
 });
+test('general suspension overrides paid access while preserving payment and math entitlements', () => {
+    const access = deriveProgramAccess(
+        { house: 'Gryffindor', generalAccessSuspended: true },
+        [paid('offline', { status: 'approved', paymentChoice: 'partial', remainingAmount: 8000 }), paid('math')]
+    );
+    assert.equal(access.hasClassAccess, false);
+    assert.equal(access.generalAccessSuspended, true);
+    assert.equal(access.paymentStatus, 'partiallyPaid');
+    assert.equal(access.existingHouseEligible, true);
+    assert.equal(access.house, 'Gryffindor');
+    assert.equal(access.hasMathAccess, true);
+    assert.equal(canAccessProgram(access, 'general'), false);
+    assert.equal(canAccessProgram(access, 'math'), true);
+});
+test('clearing general suspension restores access from the existing approved payment', () => {
+    const access = deriveProgramAccess(
+        { house: 'Gryffindor', generalAccessSuspended: false },
+        [paid('offline', { status: 'approved' })]
+    );
+    assert.equal(access.hasClassAccess, true);
+    assert.equal(access.generalAccessSuspended, false);
+    assert.equal(canAccessProgram(access, 'general'), true);
+});
 test('upgrade starts general access at its payment date and preserves math start date', () => {
     const mathDate = new Date('2026-09-05'); const upgradeDate = new Date('2026-09-10');
     const access = deriveProgramAccess({}, [paid('math', { paidAt: mathDate }), paid('slytherinUpgrade', { paidAt: upgradeDate })]);
