@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
+const PaystationCheckoutAttempt = require('../models/PaystationCheckoutAttempt');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
 const SeatBooking = require('../models/SeatBooking');
 
@@ -18,6 +19,8 @@ let gatewayCalls;
 let gatewayAmounts;
 let callbackStatus;
 let checkoutLocked;
+let attempts;
+let statusError;
 
 function matches(row, filter) {
     if (!row) return false;
@@ -56,6 +59,12 @@ Payment.findOneAndUpdate = async (_filter, update) => {
     Object.assign(payment, update.$set || {});
     return payment;
 };
+PaystationCheckoutAttempt.findOne = (filter) => query(attempts.find((row) => matches(row, filter)) || null);
+PaystationCheckoutAttempt.create = async (payload) => {
+    const row = { _id: new mongoose.Types.ObjectId(), ...payload, createdAt: new Date(), save: async () => {} };
+    attempts.push(row);
+    return row;
+};
 EnrollmentDetail.findOne = () => query({
     yourName: 'Partial Student',
     emailAddress: 'partial@example.com',
@@ -80,11 +89,15 @@ axios.post = async (url, body) => {
         };
     }
 
+    if (statusError) throw new Error('Status API unavailable');
+    const fields = new URLSearchParams(body);
+    const queriedInvoice = body instanceof URLSearchParams ? fields.get('invoice_number') : '';
+
     return {
         data: {
             status_code: '200',
             data: {
-                invoice_number: payment.finalMerchantInvoiceNumber,
+                ...(queriedInvoice ? { invoice_number: queriedInvoice } : {}),
                 trx_status: callbackStatus,
                 trx_id: 'FINAL-TRX-1',
                 payment_amount: payment.finalPaidAmount
@@ -124,6 +137,8 @@ beforeEach(() => {
     gatewayAmounts = [];
     callbackStatus = 'success';
     checkoutLocked = false;
+    attempts = [];
+    statusError = false;
     Payment.find = (filter) => query(matches(payment, filter) ? [payment] : []);
     Object.assign(process.env, {
         PAYSTATION_ENV: 'sandbox',
@@ -209,4 +224,66 @@ test('remaining checkout rejects fully paid and ambiguous students', async () =>
     const ambiguous = await call(controller.submitRemainingCheckout);
     assert.equal(ambiguous.status, 409);
     assert.match(ambiguous.message, /Multiple outstanding/);
+});
+
+test('an expired processing checkout is superseded and replaced with a fresh URL', async () => {
+    const first = await call(controller.submitRemainingCheckout);
+    attempts[0].expiresAt = new Date(Date.now() - 1000);
+    checkoutLocked = false;
+    callbackStatus = 'processing';
+
+    const replacement = await call(controller.submitRemainingCheckout);
+    assert.equal(replacement.status, 201);
+    assert.equal(replacement.data.reused, false);
+    assert.equal(replacement.data.alreadyPaid, false);
+    assert.notEqual(replacement.data.invoice, first.data.invoice);
+    assert.equal(gatewayCalls, 2);
+    assert.ok(attempts[0].supersededAt);
+    assert.equal(attempts.length, 2);
+});
+
+test('an expired checkout already paid at PayStation settles without opening another URL', async () => {
+    await call(controller.submitRemainingCheckout);
+    attempts[0].expiresAt = new Date(Date.now() - 1000);
+    checkoutLocked = false;
+    callbackStatus = 'success';
+
+    const result = await call(controller.submitRemainingCheckout);
+    assert.equal(result.status, 200);
+    assert.equal(result.data.alreadyPaid, true);
+    assert.equal(result.data.paymentUrl, '');
+    assert.equal(gatewayCalls, 1);
+    assert.equal(payment.remainingAmount, 0);
+    assert.equal(user.paymentStatus, 'fullyPaid');
+});
+
+test('status API outages return 503 without replacing or superseding the expired checkout', async () => {
+    await call(controller.submitRemainingCheckout);
+    attempts[0].expiresAt = new Date(Date.now() - 1000);
+    checkoutLocked = false;
+    statusError = true;
+
+    const result = await call(controller.submitRemainingCheckout);
+    assert.equal(result.status, 503);
+    assert.match(result.message, /could not verify/);
+    assert.equal(gatewayCalls, 1);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].supersededAt, undefined);
+});
+
+test('a delayed success settles once and a later successful attempt is flagged for review', async () => {
+    const first = await call(controller.submitRemainingCheckout);
+    attempts[0].expiresAt = new Date(Date.now() - 1000);
+    checkoutLocked = false;
+    callbackStatus = 'processing';
+    const second = await call(controller.submitRemainingCheckout);
+
+    callbackStatus = 'success';
+    const settled = await call(controller.handlePaystationCallback, {}, { invoice_number: first.data.invoice });
+    assert.match(settled.redirect, /payment\/success/);
+    const duplicate = await call(controller.handlePaystationCallback, {}, { invoice_number: second.data.invoice });
+    assert.match(duplicate.redirect, /review=duplicate-success/);
+    assert.equal(attempts[1].duplicateSuccess, true);
+    assert.equal(attempts[1].reviewRequired, true);
+    assert.equal(payment.remainingAmount, 0);
 });

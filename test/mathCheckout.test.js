@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
+const PaystationCheckoutAttempt = require('../models/PaystationCheckoutAttempt');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
 let emails = 0;
 require('../services/emailService').sendPaymentConfirmedEmail = async () => { emails++; };
@@ -14,7 +15,7 @@ const form = {
     facebookProfile: 'https://facebook.com/test', college: 'Test College', group: 'Science', hscBatch: '2026 or equivalent',
     backupChoice: ['IBA JU'], admissionSystemIdea: 'Yes', preparationMethods: ['By myself'], mathFear: 'Time pressure', mathWeaknesses: ['Wrong approach']
 };
-let user; let payments; let details; let locked; let gatewayCalls; let gatewayAmounts; let failInitiation; let returnedAmount; let callbackStatus;
+let user; let payments; let attempts; let details; let locked; let gatewayCalls; let gatewayAmounts; let failInitiation; let returnedAmount; let callbackStatus;
 function matches(row, filter) {
     return Object.entries(filter).every(([key, value]) => value?.$in ? value.$in.some(v => String(v) === String(row[key])) : String(row[key]) === String(value));
 }
@@ -25,9 +26,15 @@ User.updateOne = async () => { locked = false; };
 User.findByIdAndUpdate = async (_id, fields) => { user = { ...user, ...fields }; return user; };
 Payment.find = filter => query(payments.filter(row => matches(row, filter)));
 Payment.findOne = filter => query(payments.find(row => matches(row, filter)) || null);
+Payment.findById = id => query(payments.find(row => String(row._id) === String(id)) || null);
 Payment.create = async payload => {
     const row = { _id: new mongoose.Types.ObjectId(), ...payload, createdAt: new Date(), save: async () => {} };
     payments.push(row); return row;
+};
+PaystationCheckoutAttempt.findOne = filter => query(attempts.find(row => matches(row, filter)) || null);
+PaystationCheckoutAttempt.create = async payload => {
+    const row = { _id: new mongoose.Types.ObjectId(), ...payload, createdAt: new Date(), save: async () => {} };
+    attempts.push(row); return row;
 };
 EnrollmentDetail.create = async payload => { const row = { _id: new mongoose.Types.ObjectId(), ...payload }; details.push(row); return row; };
 EnrollmentDetail.findOne = filter => query(details.find(row => matches(row, filter)) || null);
@@ -46,7 +53,7 @@ axios.post = async (url, body) => {
 };
 beforeEach(() => {
     user = { _id: userId, role: 'student', email: 'test@example.com' };
-    payments = []; details = []; locked = false; gatewayCalls = 0; gatewayAmounts = []; failInitiation = false; returnedAmount = null; callbackStatus = 'success'; emails = 0;
+    payments = []; attempts = []; details = []; locked = false; gatewayCalls = 0; gatewayAmounts = []; failInitiation = false; returnedAmount = null; callbackStatus = 'success'; emails = 0;
     Object.assign(process.env, { PAYSTATION_ENV: 'sandbox', PAYSTATION_SANDBOX_BASE_URL: 'https://sandbox.paystation.com.bd', PAYSTATION_SANDBOX_STORE_ID: 'test', PAYSTATION_SANDBOX_PASSWORD: 'test', PAYSTATION_CALLBACK_URL: 'https://example.com/callback' });
 });
 async function call(handler, body = {}, queryParams = {}) {
@@ -70,6 +77,22 @@ test('checkout ignores submitted prices, snapshots server discounts, and reuses 
     const retry = await call(controller.submitManualEnrollment, body);
     assert.equal(retry.status, 200); assert.equal(String(retry.data.paymentId), String(first.data.paymentId));
     assert.equal(gatewayCalls, 1); assert.equal(payments.length, 1); assert.equal(locked, false);
+});
+test('an expired processing Math checkout is verified and regenerated on the same payment', async () => {
+    const body = enrollment();
+    const first = await call(controller.submitManualEnrollment, body);
+    attempts[0].expiresAt = new Date(Date.now() - 1000);
+    callbackStatus = 'processing';
+
+    const replacement = await call(controller.submitManualEnrollment, body);
+    assert.equal(replacement.status, 201);
+    assert.equal(replacement.data.reused, false);
+    assert.notEqual(replacement.data.paymentUrl, '');
+    assert.equal(payments.length, 1);
+    assert.equal(attempts.length, 2);
+    assert.ok(attempts[0].supersededAt);
+    assert.equal(gatewayCalls, 2);
+    assert.equal(String(replacement.data.paymentId), String(first.data.paymentId));
 });
 const couponCases = [
     ['cadet20', 4799.20, 9598.40],

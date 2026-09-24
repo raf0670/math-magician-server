@@ -72,6 +72,7 @@ const UserSchema = new mongoose.Schema({
     mathAccessStartsAt: { type: Date, default: null },
     generalAccessStartsAt: { type: Date, default: null },
     mathCheckoutLockUntil: { type: Date, select: false },
+    paystationCheckoutLockUntil: { type: Date, select: false },
     hasBooked: {
         type: Boolean,
         default: false,
