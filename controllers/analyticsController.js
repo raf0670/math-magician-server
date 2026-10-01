@@ -3,6 +3,7 @@ const Submission = require('../models/Submission');
 const Exam = require('../models/Exam');
 const QuestionBank = require('../models/QuestionBank');
 const User = require('../models/User');
+const RankPointAdjustment = require('../models/RankPointAdjustment');
 const mongoose = require('mongoose');
 const { HOUSES, HOUSE_META, normalizeCompetitionCategory, normalizeHouse } = require('../config/competition');
 const { getDefaultRankInfo, getRankInfoByStudentId, getRankInfoByStudentIds } = require('../services/rankService');
@@ -231,6 +232,30 @@ async function getCompetitionData(program = 'general') {
     const badgeCountByStudentId = new Map();
     const badges = [];
     const houseResultsByHouse = new Map(HOUSES.map((house) => [house, []]));
+
+    if (program === 'general') {
+        const adjustedStudentIds = await RankPointAdjustment.distinct('student', {
+            program,
+            effectiveDate: { $lte: now }
+        });
+        const adjustedStudents = adjustedStudentIds.length
+            ? await User.find({ _id: { $in: adjustedStudentIds }, role: 'student' })
+                .select('name email house profileImage')
+                .lean()
+            : [];
+
+        for (const student of adjustedStudents) {
+            const entry = formatStudent(student);
+            leaderboardByStudentId.set(entry.studentId, {
+                ...entry,
+                totalScore: 0,
+                examsTaken: 0,
+                bestScore: 0,
+                lastSubmittedAt: null,
+                disqualifiedCount: 0
+            });
+        }
+    }
 
     if (program === 'math') {
         const enrollees = await User.find({ role: 'student', hasMathAccess: true }).select('name profileImage').lean();

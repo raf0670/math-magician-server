@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
 const User = require('../models/User');
+const RankPointAdjustment = require('../models/RankPointAdjustment');
 const { getCompetitionData } = require('../controllers/analyticsController')._private;
 
 function query(value) {
@@ -32,6 +33,8 @@ test('math scores, retakes and disqualifications stay isolated from general hous
         (!filter._id || filter._id.$in.includes(user._id))
         && (filter.hasMathAccess ? user.hasMathAccess : user.hasClassAccess)
     ))));
+    t.mock.method(RankPointAdjustment, 'distinct', async () => []);
+    t.mock.method(RankPointAdjustment, 'find', () => query([]));
 
     const before = await getCompetitionData();
     results = [...generalResults, row(users[0], math, 20), row(users[1], math, 18), row(users[2], math, 19), row(users[2], math, 20, { isRetake: true }), row(users[0], math, 20, { isDisqualified: true })];

@@ -2,6 +2,7 @@ const { programFilter, programOf } = require('../config/programs');
 const Submission = require('../models/Submission');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
+const RankPointAdjustment = require('../models/RankPointAdjustment');
 const { normalizeCompetitionCategory } = require('../config/competition');
 
 const RANK_TIERS = ['Silver', 'Gold', 'Platinum', 'Master', 'Challenger', 'Legendary'];
@@ -243,6 +244,23 @@ function isPenaltyEligibleForMembership(exam, user, program = 'general') {
     return true;
 }
 
+function applyRankPointAdjustments(totalsByStudentId, adjustments = [], options = {}) {
+    const program = programOf(options.program);
+
+    for (const adjustment of adjustments) {
+        if (programOf(adjustment.program) !== program) continue;
+        const studentId = getStudentId(adjustment.student);
+        const points = Number(adjustment.points);
+        if (!studentId || !Number.isFinite(points)) continue;
+
+        const total = totalsByStudentId.get(studentId) || { points: 0, countedExamCount: 0 };
+        total.points += points;
+        totalsByStudentId.set(studentId, total);
+    }
+
+    return totalsByStudentId;
+}
+
 async function applyMissingRankPointPenalties(totalsByStudentId, submissions = [], studentIds = [], options = {}) {
     const now = options.now || new Date();
     const normalizedStudentIds = [...new Set(studentIds.map((value) => value?.toString()).filter(Boolean))];
@@ -298,7 +316,7 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
     if (!normalizedStudentIds.length) return new Map();
 
     const program = programOf(options.program);
-    const [submissions, eligibleUsers] = await Promise.all([
+    const [submissions, eligibleUsers, adjustments] = await Promise.all([
         Submission.find({ student: { $in: normalizedStudentIds } })
             .populate('exam', 'program totalMarks competitionCategory isLiveExam examType startTime endTime')
             .lean(),
@@ -308,7 +326,12 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
             ...(program === 'math'
                 ? { hasMathAccess: true }
                 : { $or: [{ hasClassAccess: true }, { generalAccessSuspended: true }] })
-        }).select('_id house mathAccessStartsAt generalAccessStartsAt generalAccessSuspended generalAccessSuspendedAt').lean()
+        }).select('_id house mathAccessStartsAt generalAccessStartsAt generalAccessSuspended generalAccessSuspendedAt').lean(),
+        RankPointAdjustment.find({
+            student: { $in: normalizedStudentIds },
+            program,
+            effectiveDate: { $lte: options.now || new Date() }
+        }).select('student program points').lean()
     ]);
 
     const rankOptions = {
@@ -323,6 +346,7 @@ async function getRankInfoByStudentIds(studentIds = [], options = {}) {
     };
 
     const totalsByStudentId = buildRankTotalsFromSubmissions(submissions, normalizedStudentIds, rankOptions);
+    applyRankPointAdjustments(totalsByStudentId, adjustments, rankOptions);
     await applyMissingRankPointPenalties(totalsByStudentId, submissions, normalizedStudentIds, rankOptions);
 
     return new Map([...totalsByStudentId.entries()].map(([studentId, total]) => [
@@ -352,6 +376,7 @@ module.exports = {
     shouldCountExam,
     _private: {
         applyMissingPenaltiesForEligibleStudents,
+        applyRankPointAdjustments,
         buildRankTotalsFromSubmissions,
         isRetakeSubmission,
         shouldPenalizeMissingDailyLiveExam

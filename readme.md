@@ -75,6 +75,18 @@ The server mounts the following route groups under `/api`:
 
 Public endpoints are limited to account entry points, the API health response, and PayStation callbacks. Student endpoints require a bearer token and, where appropriate, active program access. Authoring, enrollment review, and moderation require the `admin` role.
 
+### Audited RP adjustments
+
+Admins can preview and apply house-scoped bonus RP CSV files through the protected analytics endpoints. Files must be 1 MB or smaller, contain no more than 500 unique student emails, and use either `Email,Bonus RP` or `Name,Sum Bonus` headers. Every row must resolve to an eligible student in the selected house; one invalid row rejects the entire batch.
+
+- `POST /api/analytics/admin/rp-adjustment-batches/preview` validates a multipart `file` without writing data.
+- `POST /api/analytics/admin/rp-adjustment-batches` atomically creates an immutable batch and its ledger entries.
+- `GET /api/analytics/admin/rp-adjustment-batches` lists the audit history.
+- `POST /api/analytics/admin/rp-adjustment-batches/:batchId/reverse` creates equal opposite entries for a whole batch.
+- `GET /api/analytics/rp-adjustments/me?program=general` returns the signed-in student's adjustment history.
+
+Adjustment values are added exactly once to general RP without the Slytherin multiplier and without increasing counted exam totals. Reversals remain visible in the ledger; exam scores, badges, and score-based house points are unaffected.
+
 ## Data model
 
 The main collections are:
