@@ -97,8 +97,7 @@ test('an expired processing Math checkout is verified and regenerated on the sam
 const couponCases = [
     ['cadet20', 4799.20, 9598.40],
     ['fcc26', 4439.26, 8878.52],
-    ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498]),
-    ['early67', 5329, 11328]
+    ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498])
 ];
 for (const [coupon, mathAmount, bundleAmount] of couponCases) {
     for (const [planId, originalAmount, amount] of [['math', 5999, mathAmount], ['mathSlytherin', 11998, bundleAmount]]) {
@@ -126,12 +125,14 @@ for (const [coupon, mathAmount, bundleAmount] of couponCases) {
 
 }
 
-test('cadet15 is rejected by quote and checkout endpoints without creating a payment', async () => {
+test('retired coupons are rejected by quote and checkout endpoints without creating a payment', async () => {
     for (const planId of ['math', 'mathSlytherin']) {
-        for (const couponCode of ['cadet15', 'CADET15', '  CaDeT15  ']) {
-            const body = enrollment({ planId, couponCode });
-            assert.equal((await call(controller.getPaymentQuote, body)).status, 400);
-            assert.equal((await call(controller.submitManualEnrollment, body)).status, 400);
+        for (const retiredCode of ['cadet15', 'early67']) {
+            for (const couponCode of [retiredCode, retiredCode.toUpperCase(), `  ${retiredCode[0].toUpperCase()}${retiredCode.slice(1)}  `]) {
+                const body = enrollment({ planId, couponCode });
+                assert.equal((await call(controller.getPaymentQuote, body)).status, 400);
+                assert.equal((await call(controller.submitManualEnrollment, body)).status, 400);
+            }
         }
     }
     assert.equal(gatewayCalls, 0);
@@ -151,6 +152,24 @@ test('already-issued cadet15 payments retain their original amount and discount 
     assert.equal(payment.discountAmount, 899.85);
     assert.equal(payment.couponCode, 'CADET15');
     assert.equal(user.hasMathAccess, true);
+    assert.equal(gatewayCalls, 0);
+});
+
+test('already-issued early67 payments retain their original amount and discount on verification', async () => {
+    const payment = await Payment.create({
+        user: userId, planId: 'mathSlytherin', status: 'initiated', paymentMethod: 'paystation', paymentChoice: 'full',
+        amount: 11328, paidAmount: 11328, originalAmount: 11998, discountAmount: 670,
+        discountType: 'coupon', couponCode: 'EARLY67', merchantInvoiceNumber: 'LEGACY-EARLY67'
+    });
+    const callback = await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
+    assert.match(callback.redirect, /payment\/success/);
+    assert.equal(payment.status, 'paid');
+    assert.equal(payment.amount, 11328);
+    assert.equal(payment.discountAmount, 670);
+    assert.equal(payment.couponCode, 'EARLY67');
+    assert.equal(user.hasMathAccess, true);
+    assert.equal(user.hasClassAccess, true);
+    assert.equal(user.house, 'Slytherin');
     assert.equal(gatewayCalls, 0);
 });
 

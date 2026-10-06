@@ -19,7 +19,6 @@ function calculateMathQuote(planId, couponCode = '', access = {}) {
     const discounts = [{ kind: 'none', amount: 0 }];
     if (access.existingHouseEligible && planId === 'math') discounts.push({ kind: 'existingHouse', amount: Math.round(originalMinor * 0.25) });
     if (['MAGNUS500', 'ZEHAD500', 'NASIF500', 'SADAT500', 'SHUVRO500', 'SAJIN500'].includes(code)) discounts.push({ kind: 'coupon', amount: 50000 });
-    else if (code === 'EARLY67') discounts.push({ kind: 'coupon', amount: 67000 });
     else if (code === 'CADET20') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.20) });
     else if (code === 'FCC26') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.26) });
     else if (code === '7A597883') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.99) });

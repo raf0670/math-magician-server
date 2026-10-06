@@ -90,8 +90,7 @@ test('prices use the whole package and best single discount with two-decimal pre
 test('new coupons discount both packages, normalize codes, and preserve house and upgrade rules', () => {
     const cases = [
         ['cadet20', 4799.20, 9598.40],
-        ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498]),
-        ['early67', 5329, 11328]
+        ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498])
     ];
     for (const [coupon, mathAmount, bundleAmount] of cases) {
         for (const code of [coupon, coupon.toUpperCase(), `  ${coupon[0].toUpperCase()}${coupon.slice(1)}  `]) {
@@ -109,9 +108,11 @@ test('new coupons discount both packages, normalize codes, and preserve house an
             assert.throws(() => calculateMathQuote('slytherinUpgrade', code, { hasMathAccess: true }), /do not apply/);
         }
     }
-    for (const code of ['cadet15', 'CADET15', '  CaDeT15  ']) {
-        for (const plan of ['math', 'mathSlytherin']) assert.throws(() => calculateMathQuote(plan, code), /Invalid discount/);
-        assert.throws(() => calculateMathQuote('math', code, { existingHouseEligible: true }), /Invalid discount/);
+    for (const retiredCode of ['cadet15', 'early67']) {
+        for (const code of [retiredCode, retiredCode.toUpperCase(), `  ${retiredCode[0].toUpperCase()}${retiredCode.slice(1)}  `]) {
+            for (const plan of ['math', 'mathSlytherin']) assert.throws(() => calculateMathQuote(plan, code), /Invalid discount/);
+            assert.throws(() => calculateMathQuote('math', code, { existingHouseEligible: true }), /Invalid discount/);
+        }
     }
 });
 
