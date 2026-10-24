@@ -5,19 +5,11 @@ The Math Course is independent of general website membership. `math` grants math
 ## Enrollment and payment
 
 - Public course page: `/math-course`. Enrollment: `/payment/details?plan=math`, `mathSlytherin`, or `slytherinUpgrade`.
-- Authenticated `POST /api/payments/quote` accepts `planId` and optional `couponCode`. It returns the original amount, best single discount, and final amount.
+- Authenticated `POST /api/payments/quote` accepts `planId` and returns the flat plan amount with zero discount.
 - Authenticated `GET /api/payments/math-context` supplies eligibility and previous enrollment details for prefill/upgrades.
-- `POST /api/payments/manual-enrollment` accepts these plans with full payment, the questionnaire, coupon, and `expectedAmount`. The server recalculates eligibility and pricing; stale/tampered prices are rejected before checkout.
-- Math costs BDT 5,999; the bundle costs BDT 11,998; upgrades cost BDT 5,999 without coupons. Original-house eligibility gives 25% off math. Only the largest single discount applies to the initial package. Codes are case-insensitive and surrounding spaces are ignored, with no expiration or usage cap.
-
-| Code | Discount | Math only | Math + Slytherin |
-|---|---|---:|---:|
-| cadet20 | 20% | BDT 4,799.20 | BDT 9,598.40 |
-| fcc26 | 26% | BDT 4,439.26 | BDT 8,878.52 |
-| MAGNUS500, zehad500, nasif500, sadat500, shuvro500, sajin500 | BDT 500 | BDT 5,499.00 | BDT 11,498.00 |
-| 7a597883 | 99% | BDT 59.99 | BDT 119.98 |
-
-- `cadet15` and `early67` are retired and rejected for new quotes and checkout requests. Existing payment records and already-issued checkout amounts retain their original terms. Eligible original-house students retain their larger 25% discount when entering cadet20 or a fixed-amount coupon; fcc26 wins over the automatic house discount because it grants 26% off.
+- `POST /api/payments/manual-enrollment` accepts these plans with full payment, name, college, contact number, address, and `expectedAmount`. The server derives email from the authenticated account and recalculates eligibility and pricing; stale/tampered prices are rejected before checkout.
+- Math costs BDT 4,500; the bundle costs BDT 9,000; and a later Slytherin upgrade costs BDT 4,500. The price is the same for existing house students. Discount codes are rejected for all Math plans.
+- Existing payment records and already-issued checkout amounts retain their original terms, including historical discount metadata.
 - Access is derived from all approved/paid payment records. Initiated/processing payments and seat bookings grant no math access. Review changes and verified callbacks synchronize permissions and invalidate cached authentication.
 - Checkout retries reuse matching pending payments. A short per-user checkout lock prevents concurrent duplicate initiation. Verified gateway amounts must match the stored fractional BDT amount before math access is granted.
 
@@ -35,16 +27,16 @@ Configure the 12 Basic and 12 Archive links in `config/contentCatalog.js` under 
 
 - Math Exam Admin: `/dashboard/admin/math/live-exams`. Uses the existing JSON authoring, preview, scheduling, submissions, retakes, and moderation interfaces. Every math exam question must have a math subject. Daily Mock uses the existing daily category and 15-minute timer; Full-Length Math uses weekly scoring and the scheduled duration.
 - Class scheduling: `/dashboard/admin/classes`, with a program selector and the existing Zoom workflow.
-- Enrollment review: `/dashboard/admin/enrollments`, with math/package filters, survey answers, price/discount breakdowns, and upgrade records.
+- Enrollment review: `/dashboard/admin/enrollments`, with math/package filters, enrollment details, payment breakdowns, and upgrade records.
 - Math authoring uses the existing live-exam question source, excluded from generated practice pools.
 - Math competition includes math enrollees across all houses and math-only students. Math scores, RP, badges, and missed-exam penalties stay separate. Math leaderboards expose no house positions. Positive general-program RP rewards earned by current Slytherin members receive a 2x multiplier; penalties, Math RP, exam scores, badges, and house points remain unchanged. General exams taken by Slytherin members contribute to Slytherin; original-house students retain their original house contribution.
 
 ## Validation and release notes
 
-Backend: `npm test` — 181 passing tests, including access matrices, direct route guards, pricing, checkout/callback retries, questionnaire validation, cache invalidation, scoring isolation, and access-date penalties.
+Backend: `npm test` covers access matrices, direct route guards, pricing, checkout/callback retries, four-field enrollment validation, cache invalidation, scoring isolation, and access-date penalties.
 
-Frontend: `npm run lint` and `npm run build` pass. After a build, `node scripts/mathBrowserSmoke.cjs` in the frontend repository runs installed headless Edge against a local server with mocked API responses. It checks desktop/mobile layouts, signup/login continuation, coupon and questionnaire checkout, later upgrades, math navigation, and math administration. Screenshots are saved in ignored `.math-browser/`. Set `MATH_TEST_BROWSER` if Edge is installed elsewhere.
+Frontend: run `npm run lint` and `npm run build`. After a build, `node scripts/mathBrowserSmoke.cjs` in the frontend repository runs installed headless Edge against a local server with mocked API responses. It checks desktop/mobile layouts, signup/login continuation, four-field checkout, later upgrades, math navigation, and math administration. Screenshots are saved in ignored `.math-browser/`. Set `MATH_TEST_BROWSER` if Edge is installed elsewhere.
 
-The real PayStation sandbox request returned `1001: Invalid Credential` with the configured sandbox credentials. Consequently, real gateway acceptance of fractional prices and a completed external payment callback remain unverified. With valid sandbox credentials, run `node scripts/verifyMathSandbox.js` to verify a BDT 59.99 checkout amount, then complete a sandbox transaction to verify the callback. Do not round discounted prices to whole taka to bypass the amount check.
+The real PayStation sandbox request previously returned `1001: Invalid Credential` with the configured sandbox credentials. With valid sandbox credentials, run `node scripts/verifyMathSandbox.js` to verify a BDT 4,500 checkout amount, then complete a sandbox transaction to verify the callback.
 
 Deploy the backend before the frontend so the new protected catalog and program endpoints are available. No migration or historical scoring rewrite is required. Recording URLs, authored questions, and schedules still need to be supplied and configured. No production data migration or deployment was performed during implementation.

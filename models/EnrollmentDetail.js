@@ -75,8 +75,8 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     },
     facebookProfile: {
         type: String,
-        required: true,
-        trim: true
+        trim: true,
+        default: ''
     },
     emailAddress: {
         type: String,
@@ -91,29 +91,25 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     },
     group: {
         type: String,
-        required: true,
-        enum: ['Science', 'Arts', 'Commerce', 'Others']
+        enum: ['Science', 'Arts', 'Commerce', 'Others', ''],
+        default: ''
     },
     hscBatch: {
         type: String,
-        required: true,
-        enum: ['2025 or equivalent', '2026 or equivalent', '2027 or equivalent', 'Others']
+        enum: ['2025 or equivalent', '2026 or equivalent', '2027 or equivalent', 'Others', ''],
+        default: ''
     },
     backupChoice: {
         type: [{
             type: String,
             enum: BACKUP_CHOICES
         }],
-        required: true,
-        validate: {
-            validator: (choices) => Array.isArray(choices) && choices.length > 0,
-            message: 'Please select at least one backup option'
-        }
+        default: []
     },
     admissionSystemIdea: {
         type: String,
-        required: true,
-        enum: ['Yes', 'No', 'Maybe']
+        enum: ['Yes', 'No', 'Maybe', ''],
+        default: ''
     },
     previousIbaPreparation: {
         type: String,

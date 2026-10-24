@@ -1,7 +1,7 @@
 const PAYMENT_PLANS = {
-    math: { id: 'math', title: 'Math Course', amount: 5999, deliveryMode: 'online', partialAmount: 5999 },
-    mathSlytherin: { id: 'mathSlytherin', title: 'Math + Slytherin', amount: 11998, deliveryMode: 'online', partialAmount: 11998 },
-    slytherinUpgrade: { id: 'slytherinUpgrade', title: 'Slytherin Upgrade', amount: 5999, deliveryMode: 'online', partialAmount: 5999 },
+    math: { id: 'math', title: 'Math Course', amount: 4500, deliveryMode: 'online', partialAmount: 4500 },
+    mathSlytherin: { id: 'mathSlytherin', title: 'Math + Slytherin', amount: 9000, deliveryMode: 'online', partialAmount: 9000 },
+    slytherinUpgrade: { id: 'slytherinUpgrade', title: 'Slytherin Upgrade', amount: 4500, deliveryMode: 'online', partialAmount: 4500 },
     offline: {
         id: 'offline',
         title: 'Gryffindor',

@@ -78,75 +78,30 @@ test('revoking one purchase preserves access from the other active purchase', ()
     const upgradeRevoked = deriveProgramAccess({ house: 'Slytherin' }, [paid('math'), paid('slytherinUpgrade', { status: 'rejected' })]);
     assert.equal(upgradeRevoked.hasClassAccess, false); assert.equal(upgradeRevoked.hasMathAccess, true); assert.equal(upgradeRevoked.house, '');
 });
-test('prices use the whole package and best single discount with two-decimal precision', () => {
-    for (const [plan, code, eligible, amount] of [
-        ['math', '', false, 5999], ['mathSlytherin', '', false, 11998],
-        ['math', '', true, 4499.25], ['math', 'MAGNUS500', false, 5499],
-        ['mathSlytherin', 'MAGNUS500', false, 11498], ['math', '7a597883', false, 59.99],
-        ['mathSlytherin', '7a597883', false, 119.98], ['math', 'MAGNUS500', true, 4499.25],
-        ['math', '7a597883', true, 59.99]
-    ]) assert.equal(calculateMathQuote(plan, code, { existingHouseEligible: eligible }).amount, amount);
-});
-test('new coupons discount both packages, normalize codes, and preserve house and upgrade rules', () => {
-    const cases = [
-        ['cadet20', 4799.20, 9598.40],
-        ...['zehad500', 'nasif500', 'sadat500', 'shuvro500', 'sajin500'].map(code => [code, 5499, 11498])
-    ];
-    for (const [coupon, mathAmount, bundleAmount] of cases) {
-        for (const code of [coupon, coupon.toUpperCase(), `  ${coupon[0].toUpperCase()}${coupon.slice(1)}  `]) {
-            for (const [plan, originalAmount, amount] of [['math', 5999, mathAmount], ['mathSlytherin', 11998, bundleAmount]]) {
-                const quote = calculateMathQuote(plan, code);
-                assert.equal(quote.amount, amount, `${plan}: ${code}`);
-                assert.equal(quote.discountAmount, Number((originalAmount - amount).toFixed(2)));
-                assert.equal(quote.discountType, 'coupon');
-                assert.equal(quote.couponCode, coupon.toUpperCase());
-            }
-            const houseQuote = calculateMathQuote('math', code, { existingHouseEligible: true });
-            assert.equal(houseQuote.amount, 4499.25);
-            assert.equal(houseQuote.discountType, 'existingHouse');
-            assert.equal(houseQuote.couponCode, '');
-            assert.throws(() => calculateMathQuote('slytherinUpgrade', code, { hasMathAccess: true }), /do not apply/);
-        }
+test('math prices are flat for every eligible student', () => {
+    for (const access of [{}, { existingHouseEligible: true }]) {
+        const quote = calculateMathQuote('math', '', access);
+        assert.equal(quote.originalAmount, 4500);
+        assert.equal(quote.amount, 4500);
+        assert.equal(quote.discountAmount, 0);
+        assert.equal(quote.discountType, 'none');
+        assert.equal(quote.couponCode, '');
     }
-    for (const retiredCode of ['cadet15', 'early67']) {
-        for (const code of [retiredCode, retiredCode.toUpperCase(), `  ${retiredCode[0].toUpperCase()}${retiredCode.slice(1)}  `]) {
-            for (const plan of ['math', 'mathSlytherin']) assert.throws(() => calculateMathQuote(plan, code), /Invalid discount/);
-            assert.throws(() => calculateMathQuote('math', code, { existingHouseEligible: true }), /Invalid discount/);
-        }
-    }
+    assert.equal(calculateMathQuote('mathSlytherin').amount, 9000);
+    assert.equal(calculateMathQuote('slytherinUpgrade', '', { hasMathAccess: true }).amount, 4500);
 });
 
-test('fcc26 discounts both packages and wins over existing-house eligibility', () => {
-    for (const code of ['fcc26', 'FCC26', '  FcC26  ']) {
-        for (const [plan, originalAmount, amount] of [
-            ['math', 5999, 4439.26],
-            ['mathSlytherin', 11998, 8878.52]
-        ]) {
-            const quote = calculateMathQuote(plan, code);
-            assert.equal(quote.amount, amount);
-            assert.equal(quote.discountAmount, Number((originalAmount - amount).toFixed(2)));
-            assert.equal(quote.discountType, 'coupon');
-            assert.equal(quote.couponCode, 'FCC26');
-        }
-        const houseQuote = calculateMathQuote('math', code, { existingHouseEligible: true });
-        assert.equal(houseQuote.amount, 4439.26);
-        assert.equal(houseQuote.discountAmount, 1559.74);
-        assert.equal(houseQuote.discountType, 'coupon');
-        assert.equal(houseQuote.couponCode, 'FCC26');
-        assert.throws(() => calculateMathQuote('slytherinUpgrade', code, { hasMathAccess: true }), /do not apply/);
+test('pricing rejects all discount codes, duplicate math enrollment, and ineligible upgrades', () => {
+    for (const code of ['MAGNUS500', 'cadet20', 'FCC26', '7A597883', 'INVALID']) {
+        assert.throws(() => calculateMathQuote('math', code), /no longer available/);
     }
-});
-
-test('pricing rejects invalid codes, duplicate math enrollment, and ineligible upgrades', () => {
-    assert.throws(() => calculateMathQuote('math', 'INVALID'), /Invalid discount/);
     assert.throws(() => calculateMathQuote('math', {}), /Invalid discount/);
     assert.throws(() => calculateMathQuote('offline'), /Invalid math plan/);
     assert.throws(() => calculateMathQuote('math', '', { hasMathAccess: true }), /already enrolled/);
     assert.throws(() => calculateMathQuote('mathSlytherin', '', { existingHouseEligible: true }), /house already/);
     assert.throws(() => calculateMathQuote('slytherinUpgrade'), /active math-only/);
     assert.throws(() => calculateMathQuote('slytherinUpgrade', '', { hasMathAccess: true, hasClassAccess: true }), /active math-only/);
-    assert.throws(() => calculateMathQuote('slytherinUpgrade', 'MAGNUS500', { hasMathAccess: true }), /do not apply/);
-    assert.equal(calculateMathQuote('slytherinUpgrade', '', { hasMathAccess: true }).amount, 5999);
+    assert.throws(() => calculateMathQuote('slytherinUpgrade', 'MAGNUS500', { hasMathAccess: true }), /no longer available/);
 });
 test('legacy records remain general and math exams cannot affect normal rank totals', () => {
     assert.deepEqual(programFilter(), { program: { $ne: 'math' } });
@@ -191,13 +146,12 @@ test('math authoring rejects other subjects while preserving daily and full-leng
     assert.equal(exams.parseLiveExamPayload({ ...body, competitionCategory: 'weekly' }, 'admin').payload.duration, 90);
     assert.match(exams.parseLiveExamPayload({ ...body, questions: [{ ...question, subject: 'English' }] }, 'admin').errors.join(), /math questions only/);
 });
-test('math survey requires multiple-choice answers and descriptive Others details', () => {
-    const source = { preparationMethods: ['By myself', 'Personal batch'], mathWeaknesses: ['Wrong approach'], mathFear: 'Time pressure' };
-    assert.deepEqual(payments.validateMathSurvey(source), []);
-    assert.ok(payments.validateMathSurvey({ ...source, mathWeaknesses: ['Others'] }).includes('mathWeaknessOther'));
-    assert.ok(payments.validateMathSurvey({ ...source, preparationMethods: [] }).includes('preparationMethods'));
-    assert.ok(payments.validateMathSurvey({ ...source, mathFear: '' }).includes('mathFear'));
-    assert.deepEqual(payments.validateMathSurvey({ ...source, mathWeaknesses: ['Others'], mathWeaknessOther: 'Geometry' }), []);
+test('math enrollment requires only name, college, contact number, and address', () => {
+    const source = { yourName: 'Test Student', college: 'Test College', phoneNumber: '01700000000', address: 'Dhaka' };
+    assert.deepEqual(payments.validateMathEnrollmentForm(source), []);
+    for (const field of Object.keys(source)) {
+        assert.deepEqual(payments.validateMathEnrollmentForm({ ...source, [field]: '' }), [field]);
+    }
     assert.ok(EnrollmentDetail.schema.path('preferredBatch').enumValues.includes('Math Course'));
 });
 test('duplicate/delayed callbacks preserve paid state; refunds revoke it', () => {

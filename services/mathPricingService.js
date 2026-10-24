@@ -6,29 +6,18 @@ function invalid(message, statusCode = 400) { return Object.assign(new Error(mes
 function calculateMathQuote(planId, couponCode = '', access = {}) {
     if (typeof couponCode !== 'string') throw invalid('Invalid discount code.');
     if (!MATH_PLAN_IDS.includes(planId)) throw invalid('Invalid math plan.');
+    if (couponCode.trim()) throw invalid('Discount codes are no longer available.');
     if (access.existingHouseEligible && planId !== 'math') throw invalid('Your house already includes full website access. Choose Math only.');
     if (planId === 'slytherinUpgrade') {
         if (!access.hasMathAccess || access.hasClassAccess) throw invalid('The upgrade requires an active math-only enrollment.');
-        if (couponCode?.trim()) throw invalid('Discount codes do not apply to the Slytherin upgrade.');
     } else if (access.hasMathAccess) {
         throw invalid('You are already enrolled in Math. Use the Slytherin upgrade to add website access.', 409);
     }
     const plan = getPaymentPlan(planId);
-    const originalMinor = Math.round(plan.amount * 100);
-    const code = (couponCode || '').toString().trim().toUpperCase();
-    const discounts = [{ kind: 'none', amount: 0 }];
-    if (access.existingHouseEligible && planId === 'math') discounts.push({ kind: 'existingHouse', amount: Math.round(originalMinor * 0.25) });
-    if (['MAGNUS500', 'ZEHAD500', 'NASIF500', 'SADAT500', 'SHUVRO500', 'SAJIN500'].includes(code)) discounts.push({ kind: 'coupon', amount: 50000 });
-    else if (code === 'CADET20') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.20) });
-    else if (code === 'FCC26') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.26) });
-    else if (code === '7A597883') discounts.push({ kind: 'coupon', amount: Math.round(originalMinor * 0.99) });
-    else if (code) throw invalid('Invalid discount code.');
-    const best = discounts.sort((a, b) => b.amount - a.amount)[0];
     return {
-        planId, planTitle: plan.title, originalAmount: originalMinor / 100,
-        discountAmount: best.amount / 100, discountType: best.kind,
-        couponCode: best.kind === 'coupon' ? code : '',
-        amount: (originalMinor - best.amount) / 100,
+        planId, planTitle: plan.title, originalAmount: plan.amount,
+        discountAmount: 0, discountType: 'none',
+        couponCode: '', amount: plan.amount,
         existingHouseEligible: Boolean(access.existingHouseEligible), currency: 'BDT'
     };
 }

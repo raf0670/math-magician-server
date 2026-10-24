@@ -7,11 +7,11 @@ async function main() {
     const config = getPaystationConfig();
     if (new URL(config.baseURL).hostname !== 'sandbox.paystation.com.bd') throw new Error('Refusing a non-sandbox endpoint');
     const result = await initiatePayment({
-        invoiceNumber: `MATH-DECIMAL-TEST-${Date.now()}`, amount: 59.99,
+        invoiceNumber: `MATH-FLAT-PRICE-TEST-${Date.now()}`, amount: 4500,
         customer: { name: 'Math integration test', phone: '01700000000', email: 'math-test@example.com', address: 'Test' },
         reference: 'Sandbox decimal verification', checkoutItems: { test: true }
     });
     console.log(JSON.stringify({ status: result.status, code: result.status_code, returnedAmount: result.payment_amount, message: result.message }));
-    if (result.status !== 'success' || Number(result.payment_amount) !== 59.99) process.exitCode = 1;
+    if (result.status !== 'success' || Number(result.payment_amount) !== 4500) process.exitCode = 1;
 }
 main().catch(error => { console.error(error.code || error.message || 'Sandbox request failed'); process.exitCode = 1; });

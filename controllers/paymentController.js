@@ -1,6 +1,6 @@
 const { syncProgramAccess, loadProgramAccess } = require('../services/programAccessService');
 const { getMathQuote, invalid } = require('../services/mathPricingService');
-const { MATH_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES, PREPARATION_METHODS, MATH_WEAKNESSES } = require('../config/programs');
+const { MATH_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES } = require('../config/programs');
 const Payment = require('../models/Payment');
 const PaystationCheckoutAttempt = require('../models/PaystationCheckoutAttempt');
 const User = require('../models/User');
@@ -42,6 +42,7 @@ const STUDENT_FORM_FIELDS = [
 const REQUIRED_FORM_FIELDS = [
     ...STUDENT_FORM_FIELDS
 ];
+const MATH_REQUIRED_FORM_FIELDS = ['yourName', 'college', 'phoneNumber', 'address'];
 const FACEBOOK_LINK_ERROR = 'Please enter a valid Facebook profile link.';
 const REFERENCE_EMAIL_ERROR = 'Please enter a valid reference email address.';
 
@@ -1157,15 +1158,8 @@ exports.getMathEnrollmentContext = async (req, res) => {
         res.json({ success: true, data: { ...access, student: detail ? getStudentDetailPayload(detail) : null } });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
-function validateMathSurvey(source) {
-    const errors = [];
-    for (const [field, values] of [['preparationMethods', PREPARATION_METHODS], ['mathWeaknesses', MATH_WEAKNESSES]]) {
-        if (!Array.isArray(source[field]) || !source[field].length || source[field].some(v => !values.includes(v))) errors.push(field);
-    }
-    if (!clean(source.mathFear) || clean(source.mathFear).length > 5000) errors.push('mathFear');
-    if (source.mathWeaknesses?.includes('Others') && !clean(source.mathWeaknessOther)) errors.push('mathWeaknessOther');
-    if (clean(source.mathWeaknessOther).length > 2000) errors.push('mathWeaknessOther');
-    return errors;
+function validateMathEnrollmentForm(source) {
+    return MATH_REQUIRED_FORM_FIELDS.filter(field => !getFormValue(source, field));
 }
 async function submitMathEnrollment(req, res) {
     let locked = false;
@@ -1182,10 +1176,15 @@ async function submitMathEnrollment(req, res) {
             source = await EnrollmentDetail.findOne({ user: req.user._id, payment: { $in: paidMath.map(p => p._id) } }).sort({ createdAt: -1 }).lean();
         }
         if (!source || typeof source !== 'object') throw invalid('Enrollment details are required.');
-        source = { ...source, preferredBatch: quote.planId === 'math' ? 'Math Course' : 'Slytherin' };
-        const missingFields = [...validateManualEnrollmentForm(source), ...validateMathSurvey(source)];
+        const accountEmail = clean(req.user.email || source.emailAddress || source.email).toLowerCase();
+        source = {
+            ...source,
+            email: accountEmail,
+            emailAddress: accountEmail,
+            preferredBatch: quote.planId === 'math' ? 'Math Course' : 'Slytherin'
+        };
+        const missingFields = validateMathEnrollmentForm(source);
         if (missingFields.length) return res.status(400).json({ success: false, message: 'Please complete all required enrollment fields.', missingFields });
-        if (!isFacebookProfileLink(source.facebookProfile)) throw invalid(FACEBOOK_LINK_ERROR);
         // Validate the complete document before creating a hosted payment session.
         await new EnrollmentDetail({ ...getStudentDetailPayload(source), user: req.user._id, payment: new (require('mongoose').Types.ObjectId)(), planId: quote.planId, planTitle: quote.planTitle }).validate();
         const pending = await Payment.findOne({ user: req.user._id, planId: { $in: MATH_PLAN_IDS }, status: { $in: ['initiated', 'processing'] } }).sort({ createdAt: -1 }).lean();
@@ -1789,7 +1788,7 @@ exports.markEnrollmentFullyPaid = async (req, res) => {
 exports._private = {
     verifyMathPaymentAmount,
     verifyFinalPaymentAmount,
-    validateMathSurvey,
+    validateMathEnrollmentForm,
     getPaymentChoice,
     getPaymentMethod,
     getPlanPaymentMeta,
