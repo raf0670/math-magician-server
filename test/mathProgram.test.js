@@ -146,12 +146,13 @@ test('math authoring rejects other subjects while preserving daily and full-leng
     assert.equal(exams.parseLiveExamPayload({ ...body, competitionCategory: 'weekly' }, 'admin').payload.duration, 90);
     assert.match(exams.parseLiveExamPayload({ ...body, questions: [{ ...question, subject: 'English' }] }, 'admin').errors.join(), /math questions only/);
 });
-test('math enrollment requires only name, college, contact number, and address', () => {
-    const source = { yourName: 'Test Student', college: 'Test College', phoneNumber: '01700000000', address: 'Dhaka' };
+test('math enrollment requires name, college, contact number, address, and Facebook ID link', () => {
+    const source = { yourName: 'Test Student', college: 'Test College', phoneNumber: '01700000000', address: 'Dhaka', facebookProfile: 'https://facebook.com/test.student' };
     assert.deepEqual(payments.validateMathEnrollmentForm(source), []);
     for (const field of Object.keys(source)) {
         assert.deepEqual(payments.validateMathEnrollmentForm({ ...source, [field]: '' }), [field]);
     }
+    assert.deepEqual(payments.validateMathEnrollmentForm({ ...source, facebookProfile: '' }, { requireFacebookProfile: false }), []);
     assert.ok(EnrollmentDetail.schema.path('preferredBatch').enumValues.includes('Math Course'));
 });
 test('duplicate/delayed callbacks preserve paid state; refunds revoke it', () => {

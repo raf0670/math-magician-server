@@ -11,7 +11,7 @@ require('../services/emailService').sendPaymentConfirmedEmail = async () => { em
 const controller = require('../controllers/paymentController');
 const userId = new mongoose.Types.ObjectId();
 const form = {
-    yourName: 'Test Student', address: 'Dhaka', phoneNumber: '01700000000', college: 'Test College'
+    yourName: 'Test Student', address: 'Dhaka', phoneNumber: '01700000000', college: 'Test College', facebookProfile: 'https://facebook.com/test.student'
 };
 let user; let payments; let attempts; let details; let locked; let gatewayCalls; let gatewayAmounts; let failInitiation; let returnedAmount; let callbackStatus;
 function matches(row, filter) {
@@ -73,6 +73,7 @@ test('checkout ignores submitted prices, uses the flat server price, and reuses 
     assert.equal(payments[0].originalAmount, 4500); assert.equal(payments[0].discountAmount, 0);
     assert.equal(details[0].preferredBatch, 'Math Course'); assert.equal(user.hasMathAccess, undefined);
     assert.equal(details[0].email, user.email); assert.equal(details[0].emailAddress, user.email);
+    assert.equal(details[0].facebookProfile, form.facebookProfile);
     const retry = await call(controller.submitManualEnrollment, body);
     assert.equal(retry.status, 200); assert.equal(String(retry.data.paymentId), String(first.data.paymentId));
     assert.equal(gatewayCalls, 1); assert.equal(payments.length, 1); assert.equal(locked, false);
@@ -157,6 +158,8 @@ test('partial payments, invalid forms, and silently rounded gateway amounts cann
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ paymentChoice: 'partial' }))).status, 400);
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ formData: { ...form, college: '' } }))).status, 400);
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ formData: { ...form, address: '' } }))).status, 400);
+    assert.equal((await call(controller.submitManualEnrollment, enrollment({ formData: { ...form, facebookProfile: '' } }))).status, 400);
+    assert.equal((await call(controller.submitManualEnrollment, enrollment({ formData: { ...form, facebookProfile: 'https://example.com/student' } }))).status, 400);
     assert.equal(gatewayCalls, 0);
     returnedAmount = 4501;
     const result = await call(controller.submitManualEnrollment, enrollment());
@@ -175,9 +178,17 @@ test('upgrade reuses paid math enrollment details, forbids coupons and duplicate
     await existingMath();
     assert.equal((await call(controller.submitManualEnrollment, enrollment())).status, 409);
     const result = await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', formData: undefined }));
-    assert.equal(result.status, 201); assert.equal(details.at(-1).college, form.college); assert.equal(details.at(-1).preferredBatch, 'Slytherin');
+    assert.equal(result.status, 201); assert.equal(details.at(-1).college, form.college); assert.equal(details.at(-1).facebookProfile, form.facebookProfile); assert.equal(details.at(-1).preferredBatch, 'Slytherin');
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', couponCode: 'MAGNUS500' }))).status, 400);
     assert.equal((await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', couponCode: 'fcc26' }))).status, 400);
+});
+test('legacy math enrollments without a Facebook link can still upgrade', async () => {
+    const payment = await Payment.create({ user: userId, planId: 'math', status: 'paid', amount: 4500, paymentChoice: 'full', paidAt: new Date('2026-09-01') });
+    await EnrollmentDetail.create({ ...form, facebookProfile: '', email: user.email, emailAddress: user.email, preferredBatch: 'Math Course', user: userId, payment: payment._id, planId: 'math', planTitle: 'Math Course' });
+    const result = await call(controller.submitManualEnrollment, enrollment({ planId: 'slytherinUpgrade', formData: undefined }));
+    assert.equal(result.status, 201);
+    assert.equal(details.at(-1).facebookProfile, '');
+    assert.equal(details.at(-1).preferredBatch, 'Slytherin');
 });
 test('verified callbacks grant only math access, repeated callbacks do not resend email, and refunds remove access', async () => {
     await call(controller.submitManualEnrollment, enrollment());

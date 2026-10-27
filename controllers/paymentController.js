@@ -42,7 +42,7 @@ const STUDENT_FORM_FIELDS = [
 const REQUIRED_FORM_FIELDS = [
     ...STUDENT_FORM_FIELDS
 ];
-const MATH_REQUIRED_FORM_FIELDS = ['yourName', 'college', 'phoneNumber', 'address'];
+const MATH_REQUIRED_FORM_FIELDS = ['yourName', 'college', 'phoneNumber', 'address', 'facebookProfile'];
 const FACEBOOK_LINK_ERROR = 'Please enter a valid Facebook profile link.';
 const REFERENCE_EMAIL_ERROR = 'Please enter a valid reference email address.';
 
@@ -1158,8 +1158,8 @@ exports.getMathEnrollmentContext = async (req, res) => {
         res.json({ success: true, data: { ...access, student: detail ? getStudentDetailPayload(detail) : null } });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
-function validateMathEnrollmentForm(source) {
-    return MATH_REQUIRED_FORM_FIELDS.filter(field => !getFormValue(source, field));
+function validateMathEnrollmentForm(source, { requireFacebookProfile = true } = {}) {
+    return MATH_REQUIRED_FORM_FIELDS.filter(field => (requireFacebookProfile || field !== 'facebookProfile') && !getFormValue(source, field));
 }
 async function submitMathEnrollment(req, res) {
     let locked = false;
@@ -1183,8 +1183,10 @@ async function submitMathEnrollment(req, res) {
             emailAddress: accountEmail,
             preferredBatch: quote.planId === 'math' ? 'Math Course' : 'Slytherin'
         };
-        const missingFields = validateMathEnrollmentForm(source);
+        const requireFacebookProfile = quote.planId !== 'slytherinUpgrade';
+        const missingFields = validateMathEnrollmentForm(source, { requireFacebookProfile });
         if (missingFields.length) return res.status(400).json({ success: false, message: 'Please complete all required enrollment fields.', missingFields });
+        if (requireFacebookProfile && !isFacebookProfileLink(source.facebookProfile)) throw invalid(FACEBOOK_LINK_ERROR);
         // Validate the complete document before creating a hosted payment session.
         await new EnrollmentDetail({ ...getStudentDetailPayload(source), user: req.user._id, payment: new (require('mongoose').Types.ObjectId)(), planId: quote.planId, planTitle: quote.planTitle }).validate();
         const pending = await Payment.findOne({ user: req.user._id, planId: { $in: MATH_PLAN_IDS }, status: { $in: ['initiated', 'processing'] } }).sort({ createdAt: -1 }).lean();

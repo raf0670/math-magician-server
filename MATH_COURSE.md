@@ -7,7 +7,7 @@ The Math Course is independent of general website membership. `math` grants math
 - Public course page: `/math-course`. Enrollment: `/payment/details?plan=math`, `mathSlytherin`, or `slytherinUpgrade`.
 - Authenticated `POST /api/payments/quote` accepts `planId` and returns the flat plan amount with zero discount.
 - Authenticated `GET /api/payments/math-context` supplies eligibility and previous enrollment details for prefill/upgrades.
-- `POST /api/payments/manual-enrollment` accepts these plans with full payment, name, college, contact number, address, and `expectedAmount`. The server derives email from the authenticated account and recalculates eligibility and pricing; stale/tampered prices are rejected before checkout.
+- `POST /api/payments/manual-enrollment` accepts these plans with full payment, name, college, contact number, address, Facebook ID link, and `expectedAmount`. The server derives email from the authenticated account and recalculates eligibility and pricing; stale/tampered prices are rejected before checkout.
 - Math costs BDT 4,500; the bundle costs BDT 9,000; and a later Slytherin upgrade costs BDT 4,500. The price is the same for existing house students. Discount codes are rejected for all Math plans.
 - Existing payment records and already-issued checkout amounts retain their original terms, including historical discount metadata.
 - Access is derived from all approved/paid payment records. Initiated/processing payments and seat bookings grant no math access. Review changes and verified callbacks synchronize permissions and invalidate cached authentication.
@@ -33,9 +33,9 @@ Configure the 12 Basic and 12 Archive links in `config/contentCatalog.js` under 
 
 ## Validation and release notes
 
-Backend: `npm test` covers access matrices, direct route guards, pricing, checkout/callback retries, four-field enrollment validation, cache invalidation, scoring isolation, and access-date penalties.
+Backend: `npm test` covers access matrices, direct route guards, pricing, checkout/callback retries, five-field enrollment validation, cache invalidation, scoring isolation, and access-date penalties.
 
-Frontend: run `npm run lint` and `npm run build`. After a build, `node scripts/mathBrowserSmoke.cjs` in the frontend repository runs installed headless Edge against a local server with mocked API responses. It checks desktop/mobile layouts, signup/login continuation, four-field checkout, later upgrades, math navigation, and math administration. Screenshots are saved in ignored `.math-browser/`. Set `MATH_TEST_BROWSER` if Edge is installed elsewhere.
+Frontend: run `npm run lint` and `npm run build`. After a build, `node scripts/mathBrowserSmoke.cjs` in the frontend repository runs installed headless Edge against a local server with mocked API responses. It checks desktop/mobile layouts, signup/login continuation, five-field checkout, later upgrades, math navigation, and math administration. Screenshots are saved in ignored `.math-browser/`. Set `MATH_TEST_BROWSER` if Edge is installed elsewhere.
 
 The real PayStation sandbox request previously returned `1001: Invalid Credential` with the configured sandbox credentials. With valid sandbox credentials, run `node scripts/verifyMathSandbox.js` to verify a BDT 4,500 checkout amount, then complete a sandbox transaction to verify the callback.
 
