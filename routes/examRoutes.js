@@ -10,6 +10,7 @@ const {
     getAllExams,
     getAssignments,
     getExam,
+    getFullLengthExams,
     getLiveExams,
     getPracticeMeta,
     startPracticeExam,
@@ -18,13 +19,14 @@ const {
     updateAssignment,
     updateLiveExam
 } = require('../controllers/examController');
-const { protect, authorizeAdmin, authorizeApprovedAccess, authorizeProgramAccess, authorizeExamAccess } = require('../middleware/auth');
+const { protect, authorizeAdmin, authorizeAnyPaidCourseAccess, authorizeApprovedAccess, authorizeProgramAccess, authorizeExamAccess } = require('../middleware/auth');
 
 router.get('/', protect, authorizeApprovedAccess, getAllExams);
 router.get('/practice/meta', protect, authorizeApprovedAccess, getPracticeMeta);
 router.post('/practice/start', protect, authorizeApprovedAccess, startPracticeExam);
 router.post('/quiz/start', protect, authorizeApprovedAccess, startQuizExam);
 router.get('/live', protect, authorizeProgramAccess, getLiveExams);
+router.get('/live/full-length', protect, authorizeAnyPaidCourseAccess, getFullLengthExams);
 router.get('/live/admin', protect, authorizeAdmin, getAdminLiveExams);
 router.get('/live/admin/:id/preview', protect, authorizeAdmin, getAdminLiveExamPreview);
 router.post('/live/admin', protect, authorizeAdmin, createLiveExam);

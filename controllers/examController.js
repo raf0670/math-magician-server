@@ -3,7 +3,7 @@ const Exam = require('../models/Exam');
 const Submission = require('../models/Submission');
 const QuestionBank = require('../models/QuestionBank');
 const mongoose = require('mongoose');
-const { normalizeCompetitionCategory } = require('../config/competition');
+const { FULL_LENGTH_COMPETITION_CATEGORY, normalizeCompetitionCategory } = require('../config/competition');
 const { getAreaBalancedQuizUnits, getQuestionEffectiveArea } = require('../utils/quizBalancer');
 const {
     DAILY_LIVE_EXAM_DURATION_MINUTES,
@@ -32,6 +32,7 @@ const QUIZ_SUBJECT_WEIGHTS = [
     { subject: 'Analytical', weight: 20 }
 ];
 const SUBMISSION_REASONS = new Set(['manual', 'timer_expired', 'tab_switch']);
+const FULL_LENGTH_DURATION_MINUTES = 90;
 
 function buildOfficialExamFilter() {
     return {
@@ -54,8 +55,8 @@ function buildOfficialExamFilter() {
     };
 }
 
-function buildOfficialLiveExamFilter(program = 'general') {
-    return {
+function buildOfficialLiveExamFilter(program = 'general', options = {}) {
+    const filter = {
         ...programFilter(program),
         isLiveExam: true,
         $or: [
@@ -63,6 +64,14 @@ function buildOfficialLiveExamFilter(program = 'general') {
             { examType: { $exists: false } }
         ]
     };
+
+    if (options.competitionCategory) {
+        filter.competitionCategory = options.competitionCategory;
+    } else if (options.excludeCompetitionCategory) {
+        filter.competitionCategory = { $ne: options.excludeCompetitionCategory };
+    }
+
+    return filter;
 }
 
 function buildAssignmentExamFilter() {
@@ -1078,6 +1087,17 @@ function parseLiveExamPayload(body = {}, userId) {
     if (startTime && endTime && !Number.isNaN(startTime.getTime()) && !Number.isNaN(endTime.getTime()) && endTime <= startTime) {
         errors.push('Live exam end time must be after the start time.');
     }
+    if (program === 'math' && competitionCategory === FULL_LENGTH_COMPETITION_CATEGORY) {
+        errors.push('Full Length Mocks must be published from the general Live Exam Admin.');
+    }
+    if (
+        competitionCategory === FULL_LENGTH_COMPETITION_CATEGORY
+        && !Number.isNaN(startTime.getTime())
+        && !Number.isNaN(endTime.getTime())
+        && endTime.getTime() - startTime.getTime() !== FULL_LENGTH_DURATION_MINUTES * 60 * 1000
+    ) {
+        errors.push('Full Length Mock start and end times must be exactly 90 minutes apart.');
+    }
     if (!questions.length) errors.push('Please add at least one question.');
 
     const normalizedQuestions = questions.map((item, questionIndex) => {
@@ -1146,7 +1166,9 @@ function parseLiveExamPayload(body = {}, userId) {
             examDate,
             duration: competitionCategory === 'daily'
                 ? DAILY_LIVE_EXAM_DURATION_MINUTES
-                : (
+                : competitionCategory === FULL_LENGTH_COMPETITION_CATEGORY
+                    ? FULL_LENGTH_DURATION_MINUTES
+                    : (
                     Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())
                         ? 1
                         : calculateDurationMinutes(startTime, endTime)
@@ -1596,7 +1618,10 @@ exports.startQuizExam = async (req, res) => {
 // @access  Private
 exports.getLiveExams = async (req, res) => {
     try {
-        const exams = await Exam.find(buildOfficialLiveExamFilter(req.query.program))
+        const program = req.query.program || 'general';
+        const exams = await Exam.find(buildOfficialLiveExamFilter(program, {
+            ...(programOf(program) === 'general' ? { excludeCompetitionCategory: FULL_LENGTH_COMPETITION_CATEGORY } : {})
+        }))
             .sort({ startTime: -1 })
             .select('program title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime examDate questions createdAt createdBy')
             .lean();
@@ -1622,6 +1647,43 @@ exports.getLiveExams = async (req, res) => {
         res.status(200).json({ success: true, count: data.length, data });
     } catch (error) {
         logExamError('getLiveExams', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    List global Full Length Mocks for any actively paid student
+// @route   GET /api/exams/live/full-length
+// @access  Private/Any active course
+exports.getFullLengthExams = async (req, res) => {
+    try {
+        const exams = await Exam.find(buildOfficialLiveExamFilter('general', {
+            competitionCategory: FULL_LENGTH_COMPETITION_CATEGORY
+        }))
+            .sort({ startTime: -1 })
+            .select('program title duration totalMarks passingMarks negativeMarksPerQuestion examType competitionCategory allowRetakes isLiveExam startTime endTime examDate questions createdAt createdBy')
+            .lean();
+
+        const examIds = exams.map((exam) => exam._id);
+        const submissions = await Submission.find({
+            student: req.user.id,
+            exam: { $in: examIds },
+            isRetake: { $ne: true }
+        })
+            .select('exam score submittedAt')
+            .lean();
+        const submissionByExamId = new Map(submissions.map((submission) => [submission.exam.toString(), submission]));
+        const questionIds = [...new Set(exams.flatMap((exam) => (
+            (exam.questions || []).map(getIdString).filter(Boolean)
+        )))];
+        const existingQuestions = questionIds.length
+            ? await QuestionBank.find({ _id: { $in: questionIds } }).select('_id').lean()
+            : [];
+        const existingQuestionIdSet = new Set(existingQuestions.map((question) => question._id.toString()));
+        const data = exams.map((exam) => serializeExamSummary(exam, submissionByExamId, existingQuestionIdSet));
+
+        res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+        logExamError('getFullLengthExams', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -2192,6 +2254,7 @@ exports._private = {
     areLiveExamResultsAvailable,
     buildAdminLiveExamPreviewResponse,
     buildAssignmentExamFilter,
+    buildOfficialLiveExamFilter,
     buildOfficialSubmissionQuery,
     buildPendingLiveSubmissionResponse,
     buildPracticeQuestionSourceFilter,

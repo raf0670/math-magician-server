@@ -50,7 +50,8 @@ const BATCH_TO_HOUSE = {
     Slytherin: 'Slytherin'
 };
 
-const COMPETITION_CATEGORIES = ['daily', 'weekly'];
+const FULL_LENGTH_COMPETITION_CATEGORY = 'full-length';
+const COMPETITION_CATEGORIES = ['daily', 'weekly', FULL_LENGTH_COMPETITION_CATEGORY];
 
 function normalizeHouse(value) {
     const house = value?.toString().trim();
@@ -82,6 +83,7 @@ module.exports = {
     PLAN_TO_HOUSE,
     BATCH_TO_HOUSE,
     COMPETITION_CATEGORIES,
+    FULL_LENGTH_COMPETITION_CATEGORY,
     getHouseFromPlanId,
     getHouseFromPreferredBatch,
     normalizeCompetitionCategory,

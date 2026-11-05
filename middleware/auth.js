@@ -4,6 +4,7 @@ const { syncProgramAccess } = require('../services/programAccessService');
 const { canAccessProgram, programOf } = require('../config/programs');
 const Exam = require('../models/Exam');
 const mongoose = require('mongoose');
+const { FULL_LENGTH_COMPETITION_CATEGORY } = require('../config/competition');
 
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS) || 30000;
 const authUserCache = new Map();
@@ -95,6 +96,26 @@ async function ensureProgramAccess(req, res, next, program) {
     }
 }
 exports.authorizeApprovedAccess = (req, res, next) => ensureProgramAccess(req, res, next, 'general');
+
+function canAccessAnyPaidCourse(user) {
+    if (user?.role === 'admin') return true;
+    const hasGeneralAccess = Boolean(user?.hasClassAccess) && !user?.generalAccessSuspended;
+    return hasGeneralAccess || Boolean(user?.hasMathAccess);
+}
+
+async function ensureAnyPaidCourseAccess(req, res, next) {
+    try {
+        if (canAccessAnyPaidCourse(req.user)) return next();
+        const access = await syncProgramAccess(req.user._id);
+        req.user = { ...req.user, ...access };
+        if (canAccessAnyPaidCourse(req.user)) return next();
+        return res.status(403).json({ success: false, message: 'Enroll in any paid course to open Full Length Mocks.' });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+}
+
+exports.authorizeAnyPaidCourseAccess = ensureAnyPaidCourseAccess;
 exports.authorizeProgramAccess = (req, res, next) => {
     const program = req.query.program || 'general';
     if (!['general', 'math'].includes(program)) return res.status(400).json({ success: false, message: 'Invalid program.' });
@@ -105,11 +126,16 @@ exports.authorizeExamAccess = async (req, res, next) => {
     try {
         const id = req.params.id || req.params.examId;
         if (!mongoose.Types.ObjectId.isValid(id)) return res.status(404).json({ success: false, message: 'Exam not found.' });
-        const exam = await Exam.findById(id).select('program').lean();
+        const exam = await Exam.findById(id).select('program competitionCategory').lean();
         if (!exam) return res.status(404).json({ success: false, message: 'Exam not found.' });
         req.program = programOf(exam.program);
+        if (exam.competitionCategory === FULL_LENGTH_COMPETITION_CATEGORY) {
+            return ensureAnyPaidCourseAccess(req, res, next);
+        }
         return ensureProgramAccess(req, res, next, req.program);
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
+exports._private = { canAccessAnyPaidCourse };

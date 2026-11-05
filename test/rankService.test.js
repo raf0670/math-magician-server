@@ -124,6 +124,21 @@ test('weekly live exam rank points scale to thirty points', () => {
     assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 22.5);
 });
 
+test('full length mocks use weekly-style thirty point scaling', () => {
+    const exam = {
+        examType: 'official',
+        isLiveExam: true,
+        competitionCategory: 'full-length',
+        endTime: new Date('2026-08-16T16:30:00.000Z'),
+        totalMarks: 60
+    };
+    const submission = { exam, score: 45 };
+
+    assert.equal(shouldCountExam(exam, new Date('2026-08-16T16:30:01.000Z')), true);
+    assert.equal(getRankPointsForSubmission(submission, new Date('2026-08-16T16:30:01.000Z')), 22.5);
+    assert.equal(_private.shouldPenalizeMissingDailyLiveExam(exam, new Date('2026-08-16T16:30:01.000Z')), false);
+});
+
 test('retake submissions do not count for rank points', () => {
     const exam = {
         examType: 'official',

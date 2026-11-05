@@ -21,12 +21,21 @@ const routers = {
 const userId = '507f1f77bcf86cd799439011';
 const mathExamId = '507f1f77bcf86cd799439012';
 const generalExamId = '507f1f77bcf86cd799439013';
+const fullLengthExamId = '507f1f77bcf86cd799439014';
 let currentUser;
 function query(value) { return { select() { return this; }, sort() { return this; }, lean: async () => value }; }
 User.findById = () => query(currentUser);
 Payment.find = () => query([]);
 User.findByIdAndUpdate = async (_id, fields) => { currentUser = { ...currentUser, ...fields }; };
-Exam.findById = id => query(id === mathExamId ? { program: 'math' } : id === generalExamId ? {} : null);
+Exam.findById = id => query(
+    id === mathExamId
+        ? { program: 'math' }
+        : id === generalExamId
+            ? { program: 'general' }
+            : id === fullLengthExamId
+                ? { program: 'general', competitionCategory: 'full-length' }
+                : null
+);
 
 async function request(routerName, method, path, user, params = {}, queryParams = {}) {
     currentUser = { _id: userId, name: 'Test', role: 'student', ...user };
@@ -96,6 +105,29 @@ test('general suspension overrides a stale class-access flag without affecting m
     const user = { hasClassAccess: true, generalAccessSuspended: true, hasMathAccess: true };
     assert.equal((await request('exams', 'get', '/live', user, {}, { program: 'general' })).status, 403);
     assert.equal((await request('exams', 'get', '/live', user, {}, { program: 'math' })).status, 200);
+});
+test('full length listing, exam, submission, and rankings accept any active course membership', async () => {
+    for (const [label, user, allowed] of [
+        ['general', { hasClassAccess: true, paymentStatus: 'partiallyPaid' }, true],
+        ['math', { hasMathAccess: true }, true],
+        ['dual', { hasClassAccess: true, hasMathAccess: true }, true],
+        ['admin', { role: 'admin' }, true],
+        ['unpaid', {}, false],
+        ['suspended general', { hasClassAccess: true, generalAccessSuspended: true }, false],
+        ['suspended general with math', { hasClassAccess: true, generalAccessSuspended: true, hasMathAccess: true }, true]
+    ]) {
+        const listing = await request('exams', 'get', '/live/full-length', user);
+        assert.equal(listing.status, allowed ? 200 : 403, `${label} listing`);
+
+        for (const [router, method, path, params] of [
+            ['exams', 'get', '/:id', { id: fullLengthExamId }],
+            ['exams', 'post', '/:id/submit', { id: fullLengthExamId }],
+            ['analytics', 'get', '/leaderboard/:examId', { examId: fullLengthExamId }]
+        ]) {
+            const response = await request(router, method, path, user, params);
+            assert.equal(response.status, allowed ? 200 : 403, `${label} ${path}`);
+        }
+    }
 });
 test('student memberships cannot access authoring or moderation routes', async () => {
     const user = { hasMathAccess: true, hasClassAccess: true };

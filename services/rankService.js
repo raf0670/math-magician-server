@@ -11,7 +11,8 @@ const POINTS_PER_LEVEL = 20;
 const DAILY_LIVE_EXAM_RP_DENOMINATOR = 20;
 const CATEGORY_MAX_POINTS = {
     daily: 10,
-    weekly: 30
+    weekly: 30,
+    'full-length': 30
 };
 const ASSIGNMENT_COMPLETE_POINTS = 2;
 const ASSIGNMENT_MISSING_POINTS = -5;

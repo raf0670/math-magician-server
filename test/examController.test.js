@@ -346,6 +346,52 @@ test('weekly live exam payload keeps manual start and end times', () => {
     assert.equal(payload.duration, 90);
 });
 
+test('full length live exam payload requires and stores an exact 90 minute window', () => {
+    const { payload, errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        competitionCategory: 'full-length',
+        examDate: '',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:30:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.deepEqual(errors, []);
+    assert.equal(payload.program, 'general');
+    assert.equal(payload.examDate, null);
+    assert.equal(payload.duration, 90);
+});
+
+test('full length live exam payload rejects windows that are not exactly 90 minutes', () => {
+    const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        competitionCategory: 'full-length',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:29:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.ok(errors.includes('Full Length Mock start and end times must be exactly 90 minutes apart.'));
+});
+
+test('full length live exam payload is rejected by the math admin pathway', () => {
+    const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
+        program: 'math',
+        competitionCategory: 'full-length',
+        startTime: '2026-08-25T14:00:00.000Z',
+        endTime: '2026-08-25T15:30:00.000Z'
+    }), '507f1f77bcf86cd799439011');
+
+    assert.ok(errors.includes('Full Length Mocks must be published from the general Live Exam Admin.'));
+});
+
+test('student general live exam filter excludes full length mocks while the dedicated filter includes only them', () => {
+    assert.deepEqual(
+        _private.buildOfficialLiveExamFilter('general', { excludeCompetitionCategory: 'full-length' }).competitionCategory,
+        { $ne: 'full-length' }
+    );
+    assert.equal(
+        _private.buildOfficialLiveExamFilter('general', { competitionCategory: 'full-length' }).competitionCategory,
+        'full-length'
+    );
+});
+
 test('daily live exam payload rejects missing or invalid schedule times', () => {
     const { errors } = _private.parseLiveExamPayload(buildLiveExamPayload({
         startTime: '',
