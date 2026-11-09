@@ -106,6 +106,33 @@ test('general suspension overrides a stale class-access flag without affecting m
     assert.equal((await request('exams', 'get', '/live', user, {}, { program: 'general' })).status, 403);
     assert.equal((await request('exams', 'get', '/live', user, {}, { program: 'math' })).status, 200);
 });
+test('shared resources accept any active course membership and keep recordings program-specific', async () => {
+    for (const [label, user, allowed] of [
+        ['general partial', { hasClassAccess: true, paymentStatus: 'partiallyPaid' }, true],
+        ['math', { hasMathAccess: true }, true],
+        ['dual', { hasClassAccess: true, hasMathAccess: true }, true],
+        ['admin', { role: 'admin' }, true],
+        ['unpaid', {}, false],
+        ['refunded', { hasClassAccess: false, hasMathAccess: false, paymentStatus: 'refunded' }, false],
+        ['revoked', { hasClassAccess: false, hasMathAccess: false, paymentStatus: 'revoked' }, false],
+        ['suspended general', { hasClassAccess: true, generalAccessSuspended: true }, false],
+        ['suspended general with math', { hasClassAccess: true, generalAccessSuspended: true, hasMathAccess: true }, true]
+    ]) {
+        const response = await request('classes', 'get', '/catalog', user, {}, { kind: 'resources', program: 'general' });
+        assert.equal(response.status, allowed ? 200 : 403, `${label} resources`);
+        if (allowed) {
+            assert.deepEqual(response.body.data.map(item => item.label), ['Analytical', 'English', 'Maths', 'Miscellaneous']);
+        }
+    }
+
+    const mathResources = await request('classes', 'get', '/catalog', { hasMathAccess: true }, {}, { kind: 'resources', program: 'math' });
+    assert.equal(mathResources.status, 200);
+    assert.deepEqual(mathResources.body.data.map(item => item.label), ['Analytical', 'English', 'Maths', 'Miscellaneous']);
+
+    const mathRecordings = await request('classes', 'get', '/catalog', { hasMathAccess: true }, {}, { kind: 'recordings', program: 'math' });
+    assert.deepEqual(mathRecordings.body.data.map(item => item.label), ['Basic Classes', 'Archive Classes']);
+    assert.equal((await request('classes', 'get', '/catalog', { hasMathAccess: true }, {}, { kind: 'recordings', program: 'general' })).status, 403);
+});
 test('full length listing, exam, submission, and rankings accept any active course membership', async () => {
     for (const [label, user, allowed] of [
         ['general', { hasClassAccess: true, paymentStatus: 'partiallyPaid' }, true],

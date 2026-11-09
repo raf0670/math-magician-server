@@ -6,14 +6,25 @@ const {
     getCurrentLiveClass,
     updateLiveClass
 } = require('../controllers/liveClassController');
-const { protect, authorizeAdmin, authorizeProgramAccess } = require('../middleware/auth');
+const { protect, authorizeAdmin, authorizeAnyPaidCourseAccess, authorizeProgramAccess } = require('../middleware/auth');
 
-router.get('/catalog', protect, authorizeProgramAccess, (req, res) => {
+function authorizeCatalogAccess(req, res, next) {
+    const kind = req.query.kind || 'recordings';
+    return kind === 'resources'
+        ? authorizeAnyPaidCourseAccess(req, res, next)
+        : authorizeProgramAccess(req, res, next);
+}
+
+router.get('/catalog', protect, authorizeCatalogAccess, (req, res) => {
     const catalog = require('../config/contentCatalog');
     const kind = req.query.kind || 'recordings';
     if (!['recordings', 'resources'].includes(kind)) return res.status(400).json({ success: false, message: 'Invalid catalog.' });
-    if (req.program === 'math' && kind !== 'recordings') return res.status(403).json({ success: false, message: 'Math resources are provided with your classes.' });
-    res.set('Cache-Control', 'private, no-store').json({ success: true, data: req.program === 'math' ? catalog.mathRecordings : catalog[kind] });
+    const data = kind === 'resources'
+        ? catalog.resources
+        : req.program === 'math'
+            ? catalog.mathRecordings
+            : catalog.recordings;
+    res.set('Cache-Control', 'private, no-store').json({ success: true, data });
 });
 router.get('/current', protect, authorizeProgramAccess, getCurrentLiveClass);
 router.get('/admin', protect, authorizeAdmin, getAdminLiveClasses);

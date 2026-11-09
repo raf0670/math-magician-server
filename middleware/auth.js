@@ -109,7 +109,7 @@ async function ensureAnyPaidCourseAccess(req, res, next) {
         const access = await syncProgramAccess(req.user._id);
         req.user = { ...req.user, ...access };
         if (canAccessAnyPaidCourse(req.user)) return next();
-        return res.status(403).json({ success: false, message: 'Enroll in any paid course to open Full Length Mocks.' });
+        return res.status(403).json({ success: false, message: 'Enroll in any paid course to open this section.' });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
