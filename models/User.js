@@ -83,6 +83,7 @@ const UserSchema = new mongoose.Schema({
     hasMathAccess: { type: Boolean, default: false, index: true },
     mathPaymentStatus: { type: String, enum: ['unpaid', 'fullyPaid'], default: 'unpaid' },
     mathAccessStartsAt: { type: Date, default: null },
+    marathonSections: [{ type: String, enum: ['english', 'maths'] }],
     generalAccessStartsAt: { type: Date, default: null },
     mathCheckoutLockUntil: { type: Date, select: false },
     paystationCheckoutLockUntil: { type: Date, select: false },

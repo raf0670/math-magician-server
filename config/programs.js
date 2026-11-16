@@ -1,4 +1,6 @@
 const MATH_PLAN_IDS = ['math', 'mathSlytherin', 'slytherinUpgrade'];
+const MARATHON_PLAN_IDS = ['marathonEnglish', 'marathonMaths', 'marathonBoth', 'marathonAddEnglish', 'marathonAddMaths'];
+const MARATHON_SECTIONS = ['english', 'maths'];
 const HOUSE_PLAN_IDS = ['offline', 'gryffindor2', 'premium', 'online'];
 const APPROVED_STATUSES = ['approved', 'paid'];
 const PREPARATION_METHODS = ['By myself', 'Offline coaching ( Mentors / Blueprint )', 'Online coaching ( ACS / Michil )', 'Personal batch'];
@@ -13,4 +15,4 @@ function canAccessProgram(user, program = 'general') {
     if (programOf(program) === 'math') return Boolean(user?.hasMathAccess);
     return Boolean(user?.hasClassAccess) && !user?.generalAccessSuspended;
 }
-module.exports = { MATH_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES, PREPARATION_METHODS, MATH_WEAKNESSES, programOf, programFilter, canAccessProgram };
+module.exports = { MATH_PLAN_IDS, MARATHON_PLAN_IDS, MARATHON_SECTIONS, HOUSE_PLAN_IDS, APPROVED_STATUSES, PREPARATION_METHODS, MATH_WEAKNESSES, programOf, programFilter, canAccessProgram };

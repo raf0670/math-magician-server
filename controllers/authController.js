@@ -23,6 +23,7 @@ function formatAuthUser(user, rankInfo = getDefaultRankInfo(), mathRankInfo = ge
         profileImageThumbUrl: user.profileImage?.thumbUrl || user.profileImage?.url || '',
         hasClassAccess: Boolean(user.hasClassAccess) && !user.generalAccessSuspended,
         hasMathAccess: Boolean(user.hasMathAccess),
+        marathonSections: Array.isArray(user.marathonSections) ? user.marathonSections : [],
         mathPaymentStatus: user.mathPaymentStatus || 'unpaid',
         mathAccessStartsAt: user.mathAccessStartsAt || null,
         generalAccessStartsAt: user.generalAccessStartsAt || null,
@@ -211,7 +212,7 @@ exports.resetPassword = async (req, res) => {
 exports.getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
-            .select('name email role house bio profileImage hasClassAccess generalAccessSuspended hasMathAccess mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
+            .select('name email role house bio profileImage hasClassAccess generalAccessSuspended hasMathAccess marathonSections mathPaymentStatus mathAccessStartsAt generalAccessStartsAt hasBooked bookedPlanId bookedAt paymentStatus')
             .lean();
 
         if (!user) {

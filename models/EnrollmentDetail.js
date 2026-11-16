@@ -134,7 +134,7 @@ const EnrollmentDetailSchema = new mongoose.Schema({
     preferredBatch: {
         type: String,
         required: true,
-        enum: ['Farmgate', 'Farmgate - Gryffindor 2.0', 'Bailey Road', 'Online', 'Math Course', 'Slytherin']
+        enum: ['Farmgate', 'Farmgate - Gryffindor 2.0', 'Bailey Road', 'Online', 'Math Course', 'Slytherin', 'Marathon']
     }
 }, { timestamps: true });
 

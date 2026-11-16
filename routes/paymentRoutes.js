@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     getPaymentQuote,
     getMathEnrollmentContext,
+    getMarathonEnrollmentContext,
     submitManualEnrollment,
     submitSeatBooking,
     getMyBooking,
@@ -19,6 +20,7 @@ const { protect, authorizeAdmin } = require('../middleware/auth');
 
 router.post('/quote', protect, getPaymentQuote);
 router.get('/math-context', protect, getMathEnrollmentContext);
+router.get('/marathon-context', protect, getMarathonEnrollmentContext);
 router.get('/my-access', protect, getPaymentAccess);
 router.get('/my-booking', protect, getMyBooking);
 router.post('/manual-enrollment', protect, submitManualEnrollment);

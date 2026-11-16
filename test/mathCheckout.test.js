@@ -61,6 +61,7 @@ async function call(handler, body = {}, queryParams = {}) {
     await handler(req, res); return response;
 }
 function enrollment(extra = {}) { return { planId: 'math', formData: form, paymentChoice: 'full', expectedAmount: 4500, ...extra }; }
+function marathonEnrollment(extra = {}) { return { planId: 'marathonEnglish', formData: form, paymentChoice: 'full', expectedAmount: 1200, ...extra }; }
 async function existingMath() {
     const payment = await Payment.create({ user: userId, planId: 'math', status: 'paid', amount: 4500, paymentChoice: 'full', paidAt: new Date('2026-09-01') });
     await EnrollmentDetail.create({ ...form, email: user.email, emailAddress: user.email, preferredBatch: 'Math Course', user: userId, payment: payment._id, planId: 'math', planTitle: 'Math Course' });
@@ -212,4 +213,44 @@ test('bundle verification grants both permissions while mismatched callback amou
     returnedAmount = 9000;
     await call(controller.handlePaystationCallback, {}, { invoice_number: invoice });
     assert.equal(user.hasClassAccess, true); assert.equal(user.hasMathAccess, true); assert.equal(user.house, 'Slytherin');
+});
+
+test('Marathon checkout applies automatic returning pricing and unlocks only the purchased section', async () => {
+    await Payment.create({ user: userId, planId: 'math', status: 'paid', amount: 4500, paymentChoice: 'full', paidAt: new Date('2026-05-01') });
+    const quote = await call(controller.getPaymentQuote, { planId: 'marathonEnglish' });
+    assert.equal(quote.status, 200);
+    assert.equal(quote.data.originalAmount, 1200);
+    assert.equal(quote.data.discountAmount, 300);
+    assert.equal(quote.data.amount, 900);
+
+    const checkout = await call(controller.submitManualEnrollment, marathonEnrollment({ expectedAmount: 900 }));
+    assert.equal(checkout.status, 201);
+    assert.equal(payments.at(-1).amount, 900);
+    assert.equal(payments.at(-1).originalAmount, 1200);
+    assert.equal(payments.at(-1).discountType, 'returningStudent');
+    assert.equal(details.at(-1).preferredBatch, 'Marathon');
+    assert.deepEqual(user.marathonSections, undefined);
+
+    const invoice = payments.at(-1).merchantInvoiceNumber;
+    await call(controller.handlePaystationCallback, {}, { invoice_number: invoice });
+    assert.deepEqual(user.marathonSections, ['english']);
+    assert.equal(user.hasClassAccess, false);
+    assert.equal(user.hasMathAccess, true);
+});
+
+test('Marathon add-section checkout reuses details and reaches the discounted bundle total', async () => {
+    await Payment.create({ user: userId, planId: 'premium', status: 'paid', amount: 17500, paymentChoice: 'full', paidAt: new Date('2026-04-01') });
+    const first = await call(controller.submitManualEnrollment, marathonEnrollment({ expectedAmount: 900 }));
+    await call(controller.handlePaystationCallback, {}, { invoice_number: payments.find(payment => String(payment._id) === String(first.data.paymentId)).merchantInvoiceNumber });
+
+    const upgradeQuote = await call(controller.getPaymentQuote, { planId: 'marathonAddMaths' });
+    assert.equal(upgradeQuote.status, 200);
+    assert.equal(upgradeQuote.data.originalAmount, 800);
+    assert.equal(upgradeQuote.data.amount, 600);
+    const upgrade = await call(controller.submitManualEnrollment, marathonEnrollment({ planId: 'marathonAddMaths', formData: undefined, expectedAmount: 600 }));
+    assert.equal(upgrade.status, 201);
+    assert.equal(details.at(-1).college, form.college);
+    assert.equal(payments.at(-1).amount, 600);
+    await call(controller.handlePaystationCallback, {}, { invoice_number: payments.at(-1).merchantInvoiceNumber });
+    assert.deepEqual(user.marathonSections, ['english', 'maths']);
 });

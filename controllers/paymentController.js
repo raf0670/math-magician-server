@@ -1,6 +1,7 @@
 const { syncProgramAccess, loadProgramAccess } = require('../services/programAccessService');
 const { getMathQuote, invalid } = require('../services/mathPricingService');
-const { MATH_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES } = require('../config/programs');
+const { getMarathonQuote, getAvailableMarathonPlanIds, isReturningStudentEligible } = require('../services/marathonPricingService');
+const { MATH_PLAN_IDS, MARATHON_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES } = require('../config/programs');
 const Payment = require('../models/Payment');
 const PaystationCheckoutAttempt = require('../models/PaystationCheckoutAttempt');
 const User = require('../models/User');
@@ -1148,7 +1149,13 @@ const syncUserPaymentAccess = syncProgramAccess;
 
 exports.getPaymentQuote = async (req, res) => {
     try {
-        res.json({ success: true, data: await getMathQuote(req.user._id, req.body.planId, req.body.couponCode) });
+        if (MARATHON_PLAN_IDS.includes(req.body.planId) && clean(req.body.couponCode)) {
+            throw invalid('Marathon discounts are applied automatically.');
+        }
+        const quote = MARATHON_PLAN_IDS.includes(req.body.planId)
+            ? await getMarathonQuote(req.user._id, req.body.planId)
+            : await getMathQuote(req.user._id, req.body.planId, req.body.couponCode);
+        res.json({ success: true, data: quote });
     } catch (error) { res.status(error.statusCode || 500).json({ success: false, message: error.message }); }
 };
 exports.getMathEnrollmentContext = async (req, res) => {
@@ -1156,6 +1163,21 @@ exports.getMathEnrollmentContext = async (req, res) => {
         const { access, payments } = await loadProgramAccess(req.user._id);
         const detail = await EnrollmentDetail.findOne({ user: req.user._id, payment: { $in: payments.map(p => p._id) } }).sort({ createdAt: -1 }).lean();
         res.json({ success: true, data: { ...access, student: detail ? getStudentDetailPayload(detail) : null } });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+exports.getMarathonEnrollmentContext = async (req, res) => {
+    try {
+        const { access, payments } = await loadProgramAccess(req.user._id);
+        const detail = await EnrollmentDetail.findOne({ user: req.user._id, payment: { $in: payments.map(p => p._id) } }).sort({ createdAt: -1 }).lean();
+        res.json({
+            success: true,
+            data: {
+                marathonSections: access.marathonSections || [],
+                returningStudentEligible: isReturningStudentEligible(payments),
+                availablePlanIds: getAvailableMarathonPlanIds(access.marathonSections || []),
+                student: detail ? getStudentDetailPayload(detail) : null
+            }
+        });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 function validateMathEnrollmentForm(source, { requireFacebookProfile = true } = {}) {
@@ -1214,8 +1236,99 @@ async function submitMathEnrollment(req, res) {
     }
 }
 
+async function submitMarathonEnrollment(req, res) {
+    let locked = false;
+    try {
+        if (req.body.paymentChoice !== 'full') throw invalid('Marathon enrollment requires full payment.');
+        if (clean(req.body.couponCode)) throw invalid('Marathon discounts are applied automatically.');
+        const lock = await User.findOneAndUpdate(
+            { _id: req.user._id, $or: [{ paystationCheckoutLockUntil: { $exists: false } }, { paystationCheckoutLockUntil: { $lt: new Date() } }] },
+            { paystationCheckoutLockUntil: new Date(Date.now() + 120000) }
+        );
+        if (!lock) throw invalid('Checkout is already being prepared. Please try again shortly.', 409);
+        locked = true;
+
+        const quote = await getMarathonQuote(req.user._id, req.body.planId);
+        if (Number(req.body.expectedAmount) !== quote.amount) {
+            throw invalid('Your enrollment price has changed. Refresh the page to confirm the current price.', 409);
+        }
+
+        let source = req.body.formData;
+        const isUpgrade = ['marathonAddEnglish', 'marathonAddMaths'].includes(quote.planId);
+        if (isUpgrade) {
+            const paidMarathon = await Payment.find({
+                user: req.user._id,
+                planId: { $in: MARATHON_PLAN_IDS },
+                status: { $in: APPROVED_ACCESS_STATUSES }
+            }).select('_id').lean();
+            source = await EnrollmentDetail.findOne({
+                user: req.user._id,
+                payment: { $in: paidMarathon.map(payment => payment._id) }
+            }).sort({ createdAt: -1 }).lean();
+        }
+        if (!source || typeof source !== 'object') throw invalid('Enrollment details are required.');
+
+        const accountEmail = clean(req.user.email || source.emailAddress || source.email).toLowerCase();
+        source = {
+            ...source,
+            email: accountEmail,
+            emailAddress: accountEmail,
+            preferredBatch: 'Marathon'
+        };
+        const missingFields = validateMathEnrollmentForm(source, { requireFacebookProfile: !isUpgrade });
+        if (missingFields.length) {
+            return res.status(400).json({ success: false, message: 'Please complete all required enrollment fields.', missingFields });
+        }
+        if (!isUpgrade && !isFacebookProfileLink(source.facebookProfile)) throw invalid(FACEBOOK_LINK_ERROR);
+
+        await new EnrollmentDetail({
+            ...getStudentDetailPayload(source),
+            user: req.user._id,
+            payment: new (require('mongoose').Types.ObjectId)(),
+            planId: quote.planId,
+            planTitle: quote.planTitle
+        }).validate();
+
+        const pending = await Payment.findOne({
+            user: req.user._id,
+            planId: { $in: MARATHON_PLAN_IDS },
+            status: { $in: ['initiated', 'processing'] }
+        }).sort({ createdAt: -1 }).lean();
+        if (pending && (pending.planId !== quote.planId || pending.amount !== quote.amount)) {
+            throw invalid('A Marathon checkout is already pending. Complete or cancel it before starting a different purchase.', 409);
+        }
+
+        const plan = { ...getPaymentPlan(quote.planId), amount: quote.amount, quote };
+        const checkout = await startPaystationPayment({
+            user: req.user,
+            plan,
+            paymentChoice: 'full',
+            source,
+            mode: 'marathon-enrollment',
+            lockHeld: true
+        });
+        res.status(checkout.reused || checkout.alreadyPaid ? 200 : 201).json({
+            success: true,
+            data: {
+                paymentId: checkout.payment._id,
+                paymentUrl: checkout.paymentUrl,
+                status: checkout.payment.status,
+                paidAmount: checkout.payment.amount,
+                checkoutExpiresAt: checkout.checkoutExpiresAt,
+                reused: checkout.reused,
+                alreadyPaid: checkout.alreadyPaid
+            }
+        });
+    } catch (error) {
+        res.status(error.statusCode || (error.name === 'ValidationError' ? 400 : 500)).json({ success: false, message: error.message });
+    } finally {
+        if (locked) await User.updateOne({ _id: req.user._id }, { $unset: { paystationCheckoutLockUntil: 1 } });
+    }
+}
+
 exports.submitManualEnrollment = async (req, res) => {
     if (MATH_PLAN_IDS.includes(req.body.planId)) return submitMathEnrollment(req, res);
+    if (MARATHON_PLAN_IDS.includes(req.body.planId)) return submitMarathonEnrollment(req, res);
     try {
         if (await rejectExistingGeneralEnrollment(req, res)) return;
         const { planId, formData } = req.body;
@@ -1521,7 +1634,8 @@ exports.getPaymentAccess = async (req, res) => {
                 success: true,
                 data: {
                     hasMathAccess: true,
-                hasClassAccess: true,
+                    hasClassAccess: true,
+                    marathonSections: ['english', 'maths'],
                     paymentStatus: 'fullyPaid',
                     remainingPayment: null,
                     house: req.user.house || '',

@@ -35,7 +35,7 @@ const PaymentSchema = new mongoose.Schema({
     },
     originalAmount: { type: Number },
     discountAmount: { type: Number, default: 0 },
-    discountType: { type: String, enum: ['none', 'existingHouse', 'coupon'], default: 'none' },
+    discountType: { type: String, enum: ['none', 'existingHouse', 'coupon', 'returningStudent'], default: 'none' },
     couponCode: { type: String, default: '' },
     paymentChoice: {
         type: String,

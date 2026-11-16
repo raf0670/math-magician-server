@@ -1,7 +1,15 @@
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const { getHouseFromPlanId } = require('../config/competition');
-const { APPROVED_STATUSES, HOUSE_PLAN_IDS } = require('../config/programs');
+const { APPROVED_STATUSES, HOUSE_PLAN_IDS, MARATHON_PLAN_IDS } = require('../config/programs');
+
+const MARATHON_PLAN_SECTIONS = {
+    marathonEnglish: ['english'],
+    marathonMaths: ['maths'],
+    marathonBoth: ['english', 'maths'],
+    marathonAddEnglish: ['english'],
+    marathonAddMaths: ['maths']
+};
 
 function paymentStatus(payments) {
     if (!payments.length) return 'unpaid';
@@ -15,7 +23,9 @@ function firstPaidAt(payments) {
 function deriveProgramAccess(user = {}, payments = []) {
     const approved = payments.filter(p => APPROVED_STATUSES.includes(p.status));
     const math = approved.filter(p => ['math', 'mathSlytherin'].includes(p.planId));
-    const general = approved.filter(p => p.planId !== 'math');
+    const marathon = approved.filter(p => MARATHON_PLAN_IDS.includes(p.planId));
+    const general = approved.filter(p => p.planId !== 'math' && !MARATHON_PLAN_IDS.includes(p.planId));
+    const marathonSections = [...new Set(marathon.flatMap(p => MARATHON_PLAN_SECTIONS[p.planId] || []))];
     const generalAccessSuspended = Boolean(user.generalAccessSuspended);
     const originalHouses = general.filter(p => HOUSE_PLAN_IDS.includes(p.planId));
     const housePayment = originalHouses.find(p => getHouseFromPlanId(p.planId) === user.house) || originalHouses[0];
@@ -24,6 +34,7 @@ function deriveProgramAccess(user = {}, payments = []) {
         hasClassAccess: general.length > 0 && !generalAccessSuspended,
         generalAccessSuspended,
         hasMathAccess: math.length > 0,
+        marathonSections,
         house: housePayment ? getHouseFromPlanId(housePayment.planId) : slytherin.length ? 'Slytherin' : general.length ? user.house || '' : '',
         paymentStatus: paymentStatus(general.length ? general : math),
         mathPaymentStatus: paymentStatus(math),
