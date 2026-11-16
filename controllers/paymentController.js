@@ -1,6 +1,6 @@
 const { syncProgramAccess, loadProgramAccess } = require('../services/programAccessService');
 const { getMathQuote, invalid } = require('../services/mathPricingService');
-const { getMarathonQuote, getAvailableMarathonPlanIds, isReturningStudentEligible } = require('../services/marathonPricingService');
+const { getMarathonQuote, getAvailableMarathonPlanIds, loadMarathonPricingContext } = require('../services/marathonPricingService');
 const { MATH_PLAN_IDS, MARATHON_PLAN_IDS, HOUSE_PLAN_IDS, APPROVED_STATUSES } = require('../config/programs');
 const Payment = require('../models/Payment');
 const PaystationCheckoutAttempt = require('../models/PaystationCheckoutAttempt');
@@ -1149,11 +1149,8 @@ const syncUserPaymentAccess = syncProgramAccess;
 
 exports.getPaymentQuote = async (req, res) => {
     try {
-        if (MARATHON_PLAN_IDS.includes(req.body.planId) && clean(req.body.couponCode)) {
-            throw invalid('Marathon discounts are applied automatically.');
-        }
         const quote = MARATHON_PLAN_IDS.includes(req.body.planId)
-            ? await getMarathonQuote(req.user._id, req.body.planId)
+            ? await getMarathonQuote(req.user._id, req.body.planId, req.body.couponCode, req.body.discountPreference)
             : await getMathQuote(req.user._id, req.body.planId, req.body.couponCode);
         res.json({ success: true, data: quote });
     } catch (error) { res.status(error.statusCode || 500).json({ success: false, message: error.message }); }
@@ -1167,13 +1164,14 @@ exports.getMathEnrollmentContext = async (req, res) => {
 };
 exports.getMarathonEnrollmentContext = async (req, res) => {
     try {
-        const { access, payments } = await loadProgramAccess(req.user._id);
+        const { access, payments, returningStudentEligible, couponConsumed } = await loadMarathonPricingContext(req.user._id);
         const detail = await EnrollmentDetail.findOne({ user: req.user._id, payment: { $in: payments.map(p => p._id) } }).sort({ createdAt: -1 }).lean();
         res.json({
             success: true,
             data: {
                 marathonSections: access.marathonSections || [],
-                returningStudentEligible: isReturningStudentEligible(payments),
+                returningStudentEligible,
+                couponAvailable: !couponConsumed,
                 availablePlanIds: getAvailableMarathonPlanIds(access.marathonSections || []),
                 student: detail ? getStudentDetailPayload(detail) : null
             }
@@ -1240,7 +1238,6 @@ async function submitMarathonEnrollment(req, res) {
     let locked = false;
     try {
         if (req.body.paymentChoice !== 'full') throw invalid('Marathon enrollment requires full payment.');
-        if (clean(req.body.couponCode)) throw invalid('Marathon discounts are applied automatically.');
         const lock = await User.findOneAndUpdate(
             { _id: req.user._id, $or: [{ paystationCheckoutLockUntil: { $exists: false } }, { paystationCheckoutLockUntil: { $lt: new Date() } }] },
             { paystationCheckoutLockUntil: new Date(Date.now() + 120000) }
@@ -1248,7 +1245,7 @@ async function submitMarathonEnrollment(req, res) {
         if (!lock) throw invalid('Checkout is already being prepared. Please try again shortly.', 409);
         locked = true;
 
-        const quote = await getMarathonQuote(req.user._id, req.body.planId);
+        const quote = await getMarathonQuote(req.user._id, req.body.planId, req.body.couponCode, req.body.discountPreference);
         if (Number(req.body.expectedAmount) !== quote.amount) {
             throw invalid('Your enrollment price has changed. Refresh the page to confirm the current price.', 409);
         }

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
-const { calculateMarathonQuote, getAvailableMarathonPlanIds, isReturningStudentEligible } = require('../services/marathonPricingService');
+const { calculateMarathonQuote, getAvailableMarathonPlanIds, hasConsumedMarathonCoupon, isReturningStudentEligible, normalizeCouponCode } = require('../services/marathonPricingService');
 const { deriveProgramAccess } = require('../services/programAccessService');
 const { _private: marathonLinkValidation, getMarathonDashboard } = require('../controllers/marathonController');
 const EnrollmentDetail = require('../models/EnrollmentDetail');
@@ -38,6 +38,35 @@ test('section upgrades charge only the bundle difference and enforce the access 
     assert.equal(calculateMarathonQuote('marathonAddMaths', { marathonSections: ['english'] }, true).amount, 600);
     assert.throws(() => calculateMarathonQuote('marathonMaths', { marathonSections: ['english'] }), /available Marathon option/);
     assert.throws(() => calculateMarathonQuote('marathonBoth', { marathonSections: ['english', 'maths'] }), /already have access/);
+});
+
+test('MAGNUS200 gives a non-stacking BDT 200 discount across every Marathon purchase shape', () => {
+    for (const [planId, access, expectedAmount] of [
+        ['marathonEnglish', {}, 1000],
+        ['marathonMaths', {}, 1000],
+        ['marathonBoth', {}, 1800],
+        ['marathonAddMaths', { marathonSections: ['english'] }, 600],
+        ['marathonAddEnglish', { marathonSections: ['maths'] }, 600]
+    ]) {
+        const quote = calculateMarathonQuote(planId, access, false, { couponCode: ' magnus200 ', discountPreference: 'coupon' });
+        assert.equal(quote.amount, expectedAmount);
+        assert.equal(quote.discountAmount, 200);
+        assert.equal(quote.discountType, 'coupon');
+        assert.equal(quote.couponCode, 'MAGNUS200');
+    }
+    const returning = calculateMarathonQuote('marathonBoth', {}, true, { couponCode: 'MAGNUS200', discountPreference: 'returning' });
+    assert.equal(returning.amount, 1500);
+    assert.equal(returning.discountType, 'returningStudent');
+    assert.equal(returning.couponCode, '');
+});
+
+test('Marathon coupon validation normalizes text and rejects invalid or consumed codes', () => {
+    assert.equal(normalizeCouponCode('  magnus200 '), 'MAGNUS200');
+    assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode: 'wrong', discountPreference: 'coupon' }), /Invalid Marathon coupon/);
+    assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode: 'MAGNUS200', discountPreference: 'coupon', couponConsumed: true }), /already been used/);
+    assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { discountPreference: 'returning' }), /not available/);
+    assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'MAGNUS200', status: 'failed' }]), false);
+    assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'magnus200', status: 'refund', paidAt: new Date() }]), true);
 });
 
 test('returning eligibility uses paid non-Marathon records in the 2026 Dhaka calendar year', () => {

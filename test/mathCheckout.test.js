@@ -254,3 +254,36 @@ test('Marathon add-section checkout reuses details and reaches the discounted bu
     await call(controller.handlePaystationCallback, {}, { invoice_number: payments.at(-1).merchantInvoiceNumber });
     assert.deepEqual(user.marathonSections, ['english', 'maths']);
 });
+
+test('MAGNUS200 is normalized, stored, and permanently consumed after settlement and refund', async () => {
+    const body = marathonEnrollment({ expectedAmount: 1000, couponCode: '  magnus200 ', discountPreference: 'coupon' });
+    const quote = await call(controller.getPaymentQuote, body);
+    assert.equal(quote.status, 200);
+    assert.equal(quote.data.amount, 1000);
+    assert.equal(quote.data.couponCode, 'MAGNUS200');
+    const checkout = await call(controller.submitManualEnrollment, body);
+    assert.equal(checkout.status, 201);
+    const payment = payments.at(-1);
+    assert.equal(payment.originalAmount, 1200);
+    assert.equal(payment.discountAmount, 200);
+    assert.equal(payment.discountType, 'coupon');
+    assert.equal(payment.couponCode, 'MAGNUS200');
+
+    await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
+    callbackStatus = 'refund';
+    await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
+    const reused = await call(controller.getPaymentQuote, body);
+    assert.equal(reused.status, 409);
+    assert.match(reused.message, /already been used/);
+});
+
+test('failed MAGNUS200 checkout does not consume the coupon and can be retried', async () => {
+    const body = marathonEnrollment({ expectedAmount: 1000, couponCode: 'MAGNUS200', discountPreference: 'coupon' });
+    failInitiation = true;
+    assert.equal((await call(controller.submitManualEnrollment, body)).status, 502);
+    failInitiation = false;
+    const quote = await call(controller.getPaymentQuote, body);
+    assert.equal(quote.status, 200);
+    assert.equal(quote.data.amount, 1000);
+    assert.equal((await call(controller.submitManualEnrollment, body)).status, 201);
+});

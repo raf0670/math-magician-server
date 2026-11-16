@@ -8,6 +8,7 @@ Marathon is an independent live-class product with `english` and `maths` entitle
 - Plans: `marathonEnglish` and `marathonMaths` cost BDT 1,200; `marathonBoth` costs BDT 2,000.
 - A student with one section can add the other through `marathonAddEnglish` or `marathonAddMaths` for the BDT 800 bundle difference.
 - An approved/paid non-Marathon payment in the 2026 Asia/Dhaka calendar year grants a 25% returning-student discount. A settled discounted Marathon payment preserves that eligibility snapshot for a later add-section purchase.
+- `MAGNUS200` gives BDT 200 off one Marathon checkout per account. It can be used on an initial plan or add-section upgrade, never stacks with the returning discount, and remains consumed after a settled payment is refunded.
 - Enrollment uses full PayStation payment and the five Math-style fields: name, college, phone, address, and Facebook profile link. Upgrade checkouts reuse the first Marathon enrollment details.
 - Access is derived from approved/paid payments. Pending checkouts grant no access, and refunds/revocations remove the affected entitlement.
 
