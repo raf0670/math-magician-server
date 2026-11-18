@@ -5,7 +5,7 @@ const Payment = require('../models/Payment');
 
 const RETURNING_WINDOW_START = new Date('2025-12-31T18:00:00.000Z');
 const RETURNING_WINDOW_END = new Date('2026-12-31T18:00:00.000Z');
-const MARATHON_COUPON_CODE = 'MAGNUS200';
+const MARATHON_COUPON_CODE = 'MAGNUSBEST200';
 const MARATHON_COUPON_AMOUNT = 200;
 
 function invalid(message, statusCode = 400) {
@@ -67,7 +67,7 @@ function calculateMarathonQuote(planId, access = {}, returningStudentEligible = 
     }
     if (discountPreference === 'coupon') {
         if (couponCode !== MARATHON_COUPON_CODE) throw invalid('Invalid Marathon coupon code.');
-        if (options.couponConsumed) throw invalid('MAGNUS200 has already been used by this account.', 409);
+        if (options.couponConsumed) throw invalid('MAGNUSBEST200 has already been used by this account.', 409);
     }
 
     const discountAmount = discountPreference === 'returning'
