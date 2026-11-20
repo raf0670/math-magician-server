@@ -5,7 +5,7 @@ const Payment = require('../models/Payment');
 
 const RETURNING_WINDOW_START = new Date('2025-12-31T18:00:00.000Z');
 const RETURNING_WINDOW_END = new Date('2026-12-31T18:00:00.000Z');
-const MARATHON_COUPON_CODE = 'MAGNUSBEST200';
+const MARATHON_COUPON_CODES = ['MAGNUSBEST200', 'MAGNUS200'];
 const MARATHON_COUPON_AMOUNT = 200;
 
 function invalid(message, statusCode = 400) {
@@ -42,7 +42,7 @@ function normalizeCouponCode(value) {
 }
 
 function hasConsumedMarathonCoupon(payments = []) {
-    return payments.some(payment => normalizeCouponCode(payment.couponCode) === MARATHON_COUPON_CODE
+    return payments.some(payment => MARATHON_COUPON_CODES.includes(normalizeCouponCode(payment.couponCode))
         && (Boolean(payment.paidAt) || ['approved', 'paid', 'refund'].includes(payment.status)));
 }
 
@@ -66,8 +66,8 @@ function calculateMarathonQuote(planId, access = {}, returningStudentEligible = 
         throw invalid('The returning-student discount is not available for this account.');
     }
     if (discountPreference === 'coupon') {
-        if (couponCode !== MARATHON_COUPON_CODE) throw invalid('Invalid Marathon coupon code.');
-        if (options.couponConsumed) throw invalid('MAGNUSBEST200 has already been used by this account.', 409);
+        if (!MARATHON_COUPON_CODES.includes(couponCode)) throw invalid('Invalid Marathon coupon code.');
+        if (options.couponConsumed) throw invalid('A Marathon coupon has already been used by this account.', 409);
     }
 
     const discountAmount = discountPreference === 'returning'
@@ -82,7 +82,7 @@ function calculateMarathonQuote(planId, access = {}, returningStudentEligible = 
         discountAmount,
         discountType: discountPreference === 'returning' ? 'returningStudent' : discountPreference,
         discountPreference,
-        couponCode: discountPreference === 'coupon' ? MARATHON_COUPON_CODE : '',
+        couponCode: discountPreference === 'coupon' ? couponCode : '',
         amount: plan.amount - discountAmount,
         returningStudentEligible: Boolean(returningStudentEligible),
         couponAvailable: !options.couponConsumed,
@@ -93,7 +93,7 @@ function calculateMarathonQuote(planId, access = {}, returningStudentEligible = 
 async function loadMarathonPricingContext(userId) {
     const [{ access, payments }, couponPayments] = await Promise.all([
         loadProgramAccess(userId),
-        Payment.find({ user: userId, planId: { $in: MARATHON_PLAN_IDS }, couponCode: MARATHON_COUPON_CODE }).lean()
+        Payment.find({ user: userId, planId: { $in: MARATHON_PLAN_IDS }, couponCode: { $in: MARATHON_COUPON_CODES } }).lean()
     ]);
     return {
         access,
@@ -114,7 +114,7 @@ async function getMarathonQuote(userId, planId, couponCode = '', discountPrefere
 
 module.exports = {
     MARATHON_COUPON_AMOUNT,
-    MARATHON_COUPON_CODE,
+    MARATHON_COUPON_CODES,
     RETURNING_WINDOW_START,
     RETURNING_WINDOW_END,
     calculateMarathonQuote,

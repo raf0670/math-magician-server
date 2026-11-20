@@ -255,7 +255,7 @@ test('Marathon add-section checkout reuses details and reaches the discounted bu
     assert.deepEqual(user.marathonSections, ['english', 'maths']);
 });
 
-test('MAGNUSBEST200 is normalized, stored, and permanently consumed after settlement and refund', async () => {
+test('a settled coupon consumes both Marathon codes permanently after refund', async () => {
     const body = marathonEnrollment({ expectedAmount: 1000, couponCode: '  magnusbest200 ', discountPreference: 'coupon' });
     const quote = await call(controller.getPaymentQuote, body);
     assert.equal(quote.status, 200);
@@ -272,18 +272,20 @@ test('MAGNUSBEST200 is normalized, stored, and permanently consumed after settle
     await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
     callbackStatus = 'refund';
     await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
-    const reused = await call(controller.getPaymentQuote, body);
+    const reused = await call(controller.getPaymentQuote, marathonEnrollment({ expectedAmount: 1000, couponCode: 'MAGNUS200', discountPreference: 'coupon' }));
     assert.equal(reused.status, 409);
     assert.match(reused.message, /already been used/);
 });
 
-test('failed MAGNUSBEST200 checkout does not consume the coupon and can be retried', async () => {
-    const body = marathonEnrollment({ expectedAmount: 1000, couponCode: 'MAGNUSBEST200', discountPreference: 'coupon' });
+test('a failed checkout does not consume either Marathon coupon code', async () => {
+    const body = marathonEnrollment({ expectedAmount: 1000, couponCode: ' magnus200 ', discountPreference: 'coupon' });
     failInitiation = true;
     assert.equal((await call(controller.submitManualEnrollment, body)).status, 502);
     failInitiation = false;
     const quote = await call(controller.getPaymentQuote, body);
     assert.equal(quote.status, 200);
     assert.equal(quote.data.amount, 1000);
+    assert.equal(quote.data.couponCode, 'MAGNUS200');
     assert.equal((await call(controller.submitManualEnrollment, body)).status, 201);
+    assert.equal(payments.at(-1).couponCode, 'MAGNUS200');
 });
