@@ -110,9 +110,9 @@ test('Marathon enrollment metadata and secure link validation accept the intende
     assert.equal(marathonLinkValidation.isHttpsUrl('not-a-url'), false);
 });
 
-test('student Marathon API never returns another section link while admins can see both', async () => {
+test('student Marathon API returns class and Messenger links only for entitled sections while admins see both', async () => {
     const userId = new mongoose.Types.ObjectId();
-    const payments = [{ ...paid('marathonEnglish'), user: userId }];
+    let payments = [{ ...paid('marathonEnglish'), user: userId }];
     const links = [
         { section: 'english', url: 'https://example.com/english', isPublished: true, updatedAt: new Date() },
         { section: 'maths', url: 'https://example.com/maths', isPublished: true, updatedAt: new Date() }
@@ -135,6 +135,23 @@ test('student Marathon API never returns another section link while admins can s
     assert.equal(student.status, 200);
     assert.equal(student.body.data.sections.find(section => section.id === 'english').joinUrl, 'https://example.com/english');
     assert.equal(student.body.data.sections.find(section => section.id === 'maths').joinUrl, null);
+    assert.equal(student.body.data.sections.find(section => section.id === 'english').messengerGroupUrl, 'https://m.me/j/lakgQkQoKfW3W0XM/?send_source=gc:copy_invite_link_c');
+    assert.equal(student.body.data.sections.find(section => section.id === 'maths').messengerGroupUrl, null);
+
+    payments = [{ ...paid('marathonMaths'), user: userId }];
+    const mathsStudent = await call({ _id: userId, role: 'student' });
+    assert.equal(mathsStudent.body.data.sections.find(section => section.id === 'english').messengerGroupUrl, null);
+    assert.equal(mathsStudent.body.data.sections.find(section => section.id === 'maths').messengerGroupUrl, 'https://m.me/j/H5kf04ICYCIH5p0Z/?send_source=gc:copy_invite_link_c');
+
+    payments = [{ ...paid('marathonBoth'), user: userId }];
+    const bothStudent = await call({ _id: userId, role: 'student' });
+    assert.equal(bothStudent.body.data.sections.every(section => Boolean(section.messengerGroupUrl)), true);
+
+    payments = [];
+    const unenrolledStudent = await call({ _id: userId, role: 'student' });
+    assert.equal(unenrolledStudent.body.data.sections.every(section => section.messengerGroupUrl === null), true);
+
     const admin = await call({ _id: userId, role: 'admin' });
     assert.deepEqual(admin.body.data.sections.map(section => section.joinUrl), ['https://example.com/english', 'https://example.com/maths']);
+    assert.equal(admin.body.data.sections.every(section => Boolean(section.messengerGroupUrl)), true);
 });

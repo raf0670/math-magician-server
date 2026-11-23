@@ -2,6 +2,11 @@ const MarathonLink = require('../models/MarathonLink');
 const { MARATHON_SECTIONS } = require('../config/programs');
 const { loadProgramAccess } = require('../services/programAccessService');
 
+const MARATHON_MESSENGER_GROUP_URLS = Object.freeze({
+    english: 'https://m.me/j/lakgQkQoKfW3W0XM/?send_source=gc:copy_invite_link_c',
+    maths: 'https://m.me/j/H5kf04ICYCIH5p0Z/?send_source=gc:copy_invite_link_c'
+});
+
 function clean(value) {
     return value?.toString().trim() || '';
 }
@@ -45,6 +50,7 @@ exports.getMarathonDashboard = async (req, res) => {
                 entitled: hasAccess,
                 published: isPublished,
                 joinUrl: hasAccess && isPublished ? link.url : null,
+                messengerGroupUrl: hasAccess ? MARATHON_MESSENGER_GROUP_URLS[section] : null,
                 updatedAt: link?.updatedAt || null
             };
         });
