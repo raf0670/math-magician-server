@@ -272,7 +272,7 @@ test('a settled coupon consumes all Marathon codes permanently after refund', as
     await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
     callbackStatus = 'refund';
     await call(controller.handlePaystationCallback, {}, { invoice_number: payment.merchantInvoiceNumber });
-    for (const couponCode of ['MAGNUS200', 'ZEHADVYBEST']) {
+    for (const couponCode of ['MAGNUS200', 'ZEHADVYBEST', 'TETRISBEST']) {
         const reused = await call(controller.getPaymentQuote, marathonEnrollment({ expectedAmount: 1000, couponCode, discountPreference: 'coupon' }));
         assert.equal(reused.status, 409);
         assert.match(reused.message, /already been used/);
@@ -280,14 +280,14 @@ test('a settled coupon consumes all Marathon codes permanently after refund', as
 });
 
 test('a failed checkout does not consume a Marathon coupon code', async () => {
-    const body = marathonEnrollment({ expectedAmount: 1000, couponCode: ' zehadvybest ', discountPreference: 'coupon' });
+    const body = marathonEnrollment({ expectedAmount: 1000, couponCode: ' tetrisbest ', discountPreference: 'coupon' });
     failInitiation = true;
     assert.equal((await call(controller.submitManualEnrollment, body)).status, 502);
     failInitiation = false;
     const quote = await call(controller.getPaymentQuote, body);
     assert.equal(quote.status, 200);
     assert.equal(quote.data.amount, 1000);
-    assert.equal(quote.data.couponCode, 'ZEHADVYBEST');
+    assert.equal(quote.data.couponCode, 'TETRISBEST');
     assert.equal((await call(controller.submitManualEnrollment, body)).status, 201);
-    assert.equal(payments.at(-1).couponCode, 'ZEHADVYBEST');
+    assert.equal(payments.at(-1).couponCode, 'TETRISBEST');
 });

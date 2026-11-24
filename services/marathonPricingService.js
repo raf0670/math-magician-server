@@ -5,7 +5,7 @@ const Payment = require('../models/Payment');
 
 const RETURNING_WINDOW_START = new Date('2025-12-31T18:00:00.000Z');
 const RETURNING_WINDOW_END = new Date('2026-12-31T18:00:00.000Z');
-const MARATHON_COUPON_CODES = ['MAGNUSBEST200', 'MAGNUS200', 'ZEHADVYBEST'];
+const MARATHON_COUPON_CODES = ['MAGNUSBEST200', 'MAGNUS200', 'ZEHADVYBEST', 'TETRISBEST'];
 const MARATHON_COUPON_AMOUNT = 200;
 
 function invalid(message, statusCode = 400) {
