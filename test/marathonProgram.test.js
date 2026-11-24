@@ -40,8 +40,8 @@ test('section upgrades charge only the bundle difference and enforce the access 
     assert.throws(() => calculateMarathonQuote('marathonBoth', { marathonSections: ['english', 'maths'] }), /already have access/);
 });
 
-test('both Marathon coupons give a non-stacking BDT 200 discount across every purchase shape', () => {
-    for (const couponCode of ['magnusbest200', 'magnus200']) {
+test('all Marathon coupons give a non-stacking BDT 200 discount across every purchase shape', () => {
+    for (const couponCode of ['magnusbest200', 'magnus200', 'zehadvybest']) {
         for (const [planId, access, expectedAmount] of [
             ['marathonEnglish', {}, 1000],
             ['marathonMaths', {}, 1000],
@@ -65,14 +65,19 @@ test('both Marathon coupons give a non-stacking BDT 200 discount across every pu
 test('Marathon coupon validation normalizes text and rejects invalid or consumed codes', () => {
     assert.equal(normalizeCouponCode('  magnusbest200 '), 'MAGNUSBEST200');
     assert.equal(normalizeCouponCode('  magnus200 '), 'MAGNUS200');
+    assert.equal(normalizeCouponCode('  zehadvybest '), 'ZEHADVYBEST');
     assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode: 'wrong', discountPreference: 'coupon' }), /Invalid Marathon coupon/);
-    assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode: 'MAGNUSBEST200', discountPreference: 'coupon', couponConsumed: true }), /already been used/);
-    assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode: 'MAGNUS200', discountPreference: 'coupon', couponConsumed: true }), /already been used/);
+    assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode: 'MAGNUS200,ZEHADVYBEST', discountPreference: 'coupon' }), /Invalid Marathon coupon/);
+    for (const couponCode of ['MAGNUSBEST200', 'MAGNUS200', 'ZEHADVYBEST']) {
+        assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { couponCode, discountPreference: 'coupon', couponConsumed: true }), /already been used/);
+    }
     assert.throws(() => calculateMarathonQuote('marathonEnglish', {}, false, { discountPreference: 'returning' }), /not available/);
     assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'MAGNUSBEST200', status: 'failed' }]), false);
     assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'MAGNUS200', status: 'failed' }]), false);
+    assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'ZEHADVYBEST', status: 'failed' }]), false);
     assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'magnusbest200', status: 'refund', paidAt: new Date() }]), true);
     assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'magnus200', status: 'paid' }]), true);
+    assert.equal(hasConsumedMarathonCoupon([{ couponCode: 'zehadvybest', status: 'approved' }]), true);
 });
 
 test('returning eligibility uses paid non-Marathon records in the 2026 Dhaka calendar year', () => {
